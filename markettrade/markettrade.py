@@ -18,6 +18,7 @@ class MarketTrade(commands.Cog):
             update_interval_minutes=10,
             last_update_ts=0.0,
             seeded=False,
+            prices_cache={},
         )
         self.config.register_member(holdings={})
         self.price_updater.start()
@@ -195,7 +196,33 @@ class MarketTrade(commands.Cog):
                 f"- `{symbol}` ({asset['kind']}) {asset['name']}: "
                 f"{humanize_number(asset['price'])} credits {trend_icon}"
             )
-        await ctx.send("Current prices:\n" + "\n".join(lines))
+        prices_text = "Current prices:\n" + "\n".join(lines)
+        now = time.time()
+        channel_key = str(ctx.channel.id)
+        cache = await self.config.guild(ctx.guild).prices_cache()
+        cache_entry = cache.get(channel_key, {})
+        cached_message_id = int(cache_entry.get("message_id", 0))
+        cached_ts = float(cache_entry.get("ts", 0.0))
+
+        reused_message = False
+        if cached_message_id and (now - cached_ts) <= 300:
+            try:
+                cached_message = await ctx.channel.fetch_message(cached_message_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                reused_message = False
+            else:
+                if cached_message.author.id == ctx.me.id:
+                    await cached_message.edit(content=prices_text)
+                    reused_message = True
+
+        if reused_message:
+            cache[channel_key] = {"message_id": cached_message_id, "ts": now}
+            await self.config.guild(ctx.guild).prices_cache.set(cache)
+            return
+
+        sent_message = await ctx.send(prices_text)
+        cache[channel_key] = {"message_id": sent_message.id, "ts": now}
+        await self.config.guild(ctx.guild).prices_cache.set(cache)
 
     @market.command(name="buy")
     async def market_buy(self, ctx, symbol: str, quantity: int):

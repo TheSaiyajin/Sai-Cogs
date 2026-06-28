@@ -52,3 +52,4 @@ Once this repo is pushed to GitHub, you can install it in Red with:
 - `[p]market asset setmomentum <symbol> <percent>` (admin)
 
 Prices now use trend momentum, so dips/pumps can continue across multiple updates before reversing.
+`[p]market prices` reuses and edits the last prices message in that channel for 5 minutes instead of sending a new one.

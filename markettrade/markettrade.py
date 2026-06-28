@@ -44,6 +44,8 @@ class MarketTrade(commands.Cog):
                 "risk": 1.2,
                 "momentum": 0.68,
                 "reversal_accel": 0.08,
+                "drift": 0.0012,
+                "bull_bias": 0.07,
                 "trend": 0,
                 "trend_streak": 0,
             },
@@ -57,6 +59,8 @@ class MarketTrade(commands.Cog):
                 "risk": 1.15,
                 "momentum": 0.66,
                 "reversal_accel": 0.08,
+                "drift": 0.001,
+                "bull_bias": 0.06,
                 "trend": 0,
                 "trend_streak": 0,
             },
@@ -70,6 +74,8 @@ class MarketTrade(commands.Cog):
                 "risk": 1.0,
                 "momentum": 0.58,
                 "reversal_accel": 0.09,
+                "drift": 0.0007,
+                "bull_bias": 0.05,
                 "trend": 0,
                 "trend_streak": 0,
             },
@@ -165,12 +171,16 @@ class MarketTrade(commands.Cog):
                 "risk": 1.2,
                 "momentum": 0.68,
                 "reversal_accel": 0.08,
+                "drift": 0.001,
+                "bull_bias": 0.06,
             }
         return {
             "volatility": 0.05,
             "risk": 1.0,
             "momentum": 0.58,
             "reversal_accel": 0.09,
+            "drift": 0.0006,
+            "bull_bias": 0.05,
         }
 
     async def _update_guild_prices(self, guild_id: int):
@@ -188,16 +198,22 @@ class MarketTrade(commands.Cog):
             risk = max(0.2, float(asset.get("risk", 1.0)))
             momentum = min(0.95, max(0.05, float(asset.get("momentum", 0.6))))
             reversal_accel = min(0.5, max(0.01, float(asset.get("reversal_accel", 0.08))))
+            drift = min(0.2, max(-0.2, float(asset.get("drift", 0.0))))
+            bull_bias = min(0.4, max(-0.4, float(asset.get("bull_bias", 0.05))))
             min_price = max(1.0, float(asset.get("min_price", 1.0)))
             max_price = max(min_price, float(asset.get("max_price", min_price)))
             trend = int(asset.get("trend", 0))
             trend_streak = max(0, int(asset.get("trend_streak", 0)))
 
             if trend == 0:
-                trend = random.choice((-1, 1))
+                trend = 1 if random.random() < (0.5 + (bull_bias / 2.0)) else -1
                 trend_streak = 0
             else:
-                continue_chance = max(0.05, momentum - (trend_streak * reversal_accel))
+                trend_persistence_bias = bull_bias if trend > 0 else -bull_bias
+                continue_chance = max(
+                    0.05,
+                    min(0.98, momentum + trend_persistence_bias - (trend_streak * reversal_accel)),
+                )
                 if random.random() > continue_chance:
                     trend *= -1
                     trend_streak = 0
@@ -207,7 +223,7 @@ class MarketTrade(commands.Cog):
                 directional_move *= 1.0 + min(0.45, trend_streak * 0.08)
 
             noise = random.uniform(-volatility * 0.15, volatility * 0.15)
-            change = (directional_move * trend) + noise
+            change = (directional_move * trend) + noise + drift
             if change * trend < 0:
                 change = trend * abs(change) * 0.35
 
@@ -552,6 +568,8 @@ class MarketTrade(commands.Cog):
                 "risk": defaults["risk"],
                 "momentum": defaults["momentum"],
                 "reversal_accel": defaults["reversal_accel"],
+                "drift": defaults["drift"],
+                "bull_bias": defaults["bull_bias"],
                 "trend": 0,
                 "trend_streak": 0,
             }
@@ -590,12 +608,16 @@ class MarketTrade(commands.Cog):
             volatility_percent = round(float(asset.get("volatility", 0.0)) * 100, 2)
             risk = round(float(asset.get("risk", 1.0)), 2)
             momentum_percent = round(float(asset.get("momentum", 0.6)) * 100, 1)
+            drift_percent = round(float(asset.get("drift", 0.0)) * 100, 2)
+            bull_bias_percent = round(float(asset.get("bull_bias", 0.05)) * 100, 2)
             lines.append(
                 f"- `{symbol}` ({asset['kind']}) {asset['name']}: "
                 f"price={humanize_number(asset['price'])}, "
                 f"volatility={volatility_percent}%, "
                 f"risk={risk}x, "
-                f"momentum={momentum_percent}%"
+                f"momentum={momentum_percent}%, "
+                f"drift={drift_percent}%, "
+                f"bull_bias={bull_bias_percent}%"
             )
         await ctx.send("Assets:\n" + "\n".join(lines))
 
@@ -679,6 +701,44 @@ class MarketTrade(commands.Cog):
             assets[normalized_symbol] = asset
 
         await ctx.send(f"`{normalized_symbol}` momentum set to {round(percent, 2)}%.")
+
+    @market_asset.command(name="setdrift")
+    async def market_asset_setdrift(self, ctx, symbol: str, percent: float):
+        """Set baseline per-tick drift in percent (positive favors upward movement)."""
+        await self._ensure_guild_initialized(ctx.guild.id)
+        normalized_symbol = self._normalize_symbol(symbol)
+        if percent < -10 or percent > 10:
+            await ctx.send("Drift percent must be between -10 and 10.")
+            return
+
+        async with self.config.guild(ctx.guild).assets() as assets:
+            asset = assets.get(normalized_symbol)
+            if asset is None:
+                await ctx.send(f"`{normalized_symbol}` does not exist.")
+                return
+            asset["drift"] = round(percent / 100, 4)
+            assets[normalized_symbol] = asset
+
+        await ctx.send(f"`{normalized_symbol}` drift set to {round(percent, 2)}% per update.")
+
+    @market_asset.command(name="setbullbias")
+    async def market_asset_setbullbias(self, ctx, symbol: str, percent: float):
+        """Set trend bias percent (positive favors uptrends, negative favors downtrends)."""
+        await self._ensure_guild_initialized(ctx.guild.id)
+        normalized_symbol = self._normalize_symbol(symbol)
+        if percent < -40 or percent > 40:
+            await ctx.send("Bull bias percent must be between -40 and 40.")
+            return
+
+        async with self.config.guild(ctx.guild).assets() as assets:
+            asset = assets.get(normalized_symbol)
+            if asset is None:
+                await ctx.send(f"`{normalized_symbol}` does not exist.")
+                return
+            asset["bull_bias"] = round(percent / 100, 4)
+            assets[normalized_symbol] = asset
+
+        await ctx.send(f"`{normalized_symbol}` bull bias set to {round(percent, 2)}%.")
 
 
 async def setup(bot):

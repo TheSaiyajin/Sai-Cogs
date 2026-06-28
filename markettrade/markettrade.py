@@ -20,6 +20,7 @@ class MarketTrade(commands.Cog):
             seeded=False,
             prices_cache={},
             live_prices_message={},
+            price_history={},
         )
         self.config.register_member(holdings={})
         self.price_updater.start()
@@ -83,11 +84,35 @@ class MarketTrade(commands.Cog):
             if not assets:
                 assets.update(self._build_default_assets())
 
+        seeded_assets = await guild_conf.assets()
+        await self._record_prices_snapshot(guild_conf, seeded_assets)
         await guild_conf.seeded.set(True)
 
     async def _get_assets(self, guild):
         await self._ensure_guild_initialized(guild.id)
         return await self.config.guild(guild).assets()
+
+    @staticmethod
+    def _build_sparkline(values):
+        bars = "▁▂▃▄▅▆▇█"
+        if not values:
+            return ""
+        min_value = min(values)
+        max_value = max(values)
+        if max_value == min_value:
+            return bars[0] * len(values)
+        step = (max_value - min_value) / (len(bars) - 1)
+        return "".join(bars[min(len(bars) - 1, int((value - min_value) / step))] for value in values)
+
+    async def _append_price_history(self, guild_conf, symbol: str, price: float):
+        async with guild_conf.price_history() as history:
+            symbol_history = list(history.get(symbol, []))
+            symbol_history.append(round(float(price), 2))
+            history[symbol] = symbol_history[-120:]
+
+    async def _record_prices_snapshot(self, guild_conf, assets):
+        for symbol, asset in assets.items():
+            await self._append_price_history(guild_conf, symbol, float(asset["price"]))
 
     def _build_prices_text(self, assets):
         lines = []
@@ -200,6 +225,7 @@ class MarketTrade(commands.Cog):
             updated_assets[symbol] = updated_asset
 
         await guild_conf.assets.set(updated_assets)
+        await self._record_prices_snapshot(guild_conf, updated_assets)
         await guild_conf.last_update_ts.set(time.time())
 
     @tasks.loop(minutes=1)
@@ -362,6 +388,41 @@ class MarketTrade(commands.Cog):
             + f"\nEstimated total value: {humanize_number(total_value)} credits"
         )
 
+    @market.command(name="graph")
+    async def market_graph(self, ctx, symbol: str, points: int = 20):
+        """Show price history graph for an asset."""
+        if points < 5 or points > 60:
+            await ctx.send("Points must be between 5 and 60.")
+            return
+
+        normalized_symbol = self._normalize_symbol(symbol)
+        assets = await self._get_assets(ctx.guild)
+        asset = assets.get(normalized_symbol)
+        if asset is None:
+            await ctx.send(f"Asset `{normalized_symbol}` does not exist.")
+            return
+
+        history = await self.config.guild(ctx.guild).price_history()
+        values = list(history.get(normalized_symbol, []))
+        if not values:
+            values = [float(asset["price"])]
+        values = values[-points:]
+
+        sparkline = self._build_sparkline(values)
+        first = values[0]
+        last = values[-1]
+        change = last - first
+        change_percent = 0.0 if first == 0 else (change / first) * 100
+        direction = "up" if change > 0 else "down" if change < 0 else "flat"
+
+        await ctx.send(
+            f"`{normalized_symbol}` ({asset['name']}) last {len(values)} points:\n"
+            f"`{sparkline}`\n"
+            f"Low: {humanize_number(min(values))} | High: {humanize_number(max(values))}\n"
+            f"Start: {humanize_number(round(first, 2))} | Now: {humanize_number(round(last, 2))}\n"
+            f"Change: {humanize_number(round(change, 2))} ({round(change_percent, 2)}%) [{direction}]"
+        )
+
     @market.command(name="interval")
     @commands.admin_or_permissions(manage_guild=True)
     async def market_interval(self, ctx, minutes: int):
@@ -443,6 +504,9 @@ class MarketTrade(commands.Cog):
         await ctx.send(
             f"Added `{normalized_symbol}` ({normalized_kind}) at {humanize_number(round(starting_price, 2))} credits."
         )
+        await self._append_price_history(
+            self.config.guild(ctx.guild), normalized_symbol, round(starting_price, 2)
+        )
 
     @market_asset.command(name="remove")
     async def market_asset_remove(self, ctx, symbol: str):
@@ -500,6 +564,9 @@ class MarketTrade(commands.Cog):
             assets[normalized_symbol] = asset
 
         await ctx.send(f"`{normalized_symbol}` price set to {humanize_number(round(new_price, 2))}.")
+        await self._append_price_history(
+            self.config.guild(ctx.guild), normalized_symbol, round(new_price, 2)
+        )
 
     @market_asset.command(name="setvolatility")
     async def market_asset_setvolatility(self, ctx, symbol: str, percent: float):

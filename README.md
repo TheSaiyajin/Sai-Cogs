@@ -38,6 +38,7 @@ Once this repo is pushed to GitHub, you can install it in Red with:
 
 ## MarketTrade Commands
 - `[p]market prices`
+- `[p]market graph <symbol> [points]`
 - `[p]market buy <symbol> <quantity>`
 - `[p]market sell <symbol> <quantity>`
 - `[p]market portfolio [member]`

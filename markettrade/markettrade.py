@@ -24,6 +24,7 @@ class MarketTrade(commands.Cog):
             active_events={},
             random_events_enabled=True,
             random_event_chance_percent=6.0,
+            event_announce_channel_id=0,
         )
         self.config.register_member(holdings={}, cost_basis={}, realized_profit={})
         self.price_updater.start()
@@ -150,11 +151,11 @@ class MarketTrade(commands.Cog):
     def _roll_random_event(active_events, assets, chance_percent: float):
         chance = min(100.0, max(0.0, float(chance_percent))) / 100.0
         if random.random() >= chance:
-            return active_events
+            return active_events, None
 
         available_symbols = [symbol for symbol in assets.keys() if symbol not in active_events]
         if not available_symbols:
-            return active_events
+            return active_events, None
 
         selected_symbol = random.choice(available_symbols)
         random_percent = round(random.uniform(3.0, 10.0), 2)
@@ -164,7 +165,27 @@ class MarketTrade(commands.Cog):
             "remaining_ticks": random.randint(2, 10),
             "source": "random",
         }
-        return active_events
+        return active_events, (selected_symbol, dict(active_events[selected_symbol]))
+
+    async def _announce_event_message(self, guild_id: int, message: str):
+        guild_conf = self.config.guild_from_id(guild_id)
+        channel_id = int(await guild_conf.event_announce_channel_id())
+        if not channel_id:
+            return
+
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            await guild_conf.event_announce_channel_id.set(0)
+            return
+
+        try:
+            await channel.send(message)
+        except (discord.Forbidden, discord.HTTPException):
+            return
 
     async def _update_live_prices_message(self, guild_id: int):
         guild_conf = self.config.guild_from_id(guild_id)
@@ -281,10 +302,20 @@ class MarketTrade(commands.Cog):
         }
         random_events_enabled = bool(await guild_conf.random_events_enabled())
         random_event_chance_percent = float(await guild_conf.random_event_chance_percent())
+        random_event_started = None
         if random_events_enabled:
-            active_events = self._roll_random_event(active_events, assets, random_event_chance_percent)
+            active_events, random_event_started = self._roll_random_event(
+                active_events, assets, random_event_chance_percent
+            )
+        if random_event_started is not None:
+            started_symbol, started_event_data = random_event_started
+            await self._announce_event_message(
+                guild_id,
+                f"Random event started for `{started_symbol}`: {self._format_event_line(started_event_data)}.",
+            )
 
         updated_assets = {}
+        ended_events = []
         for symbol, asset in assets.items():
             event_data = active_events.get(symbol)
             event_change = 0.0
@@ -344,6 +375,7 @@ class MarketTrade(commands.Cog):
 
             if symbol in active_events:
                 if event_remaining_ticks <= 1:
+                    ended_events.append(symbol)
                     del active_events[symbol]
                 else:
                     next_event_data = dict(active_events[symbol])
@@ -354,6 +386,11 @@ class MarketTrade(commands.Cog):
         await guild_conf.active_events.set(active_events)
         await self._record_prices_snapshot(guild_conf, updated_assets)
         await guild_conf.last_update_ts.set(time.time())
+        if ended_events:
+            await self._announce_event_message(
+                guild_id,
+                "Event ended for: " + ", ".join(f"`{symbol}`" for symbol in sorted(ended_events)) + ".",
+            )
 
     @tasks.loop(minutes=1)
     async def price_updater(self):
@@ -653,8 +690,14 @@ class MarketTrade(commands.Cog):
     async def market_event_list(self, ctx):
         """List active market events."""
         active_events = await self.config.guild(ctx.guild).active_events()
+        announce_channel_id = int(await self.config.guild(ctx.guild).event_announce_channel_id())
         if not active_events:
-            await ctx.send("There are no active events.")
+            if announce_channel_id:
+                await ctx.send(
+                    f"There are no active events.\nAnnouncement channel: <#{announce_channel_id}>"
+                )
+            else:
+                await ctx.send("There are no active events.\nAnnouncement channel: not set.")
             return
 
         lines = []
@@ -663,9 +706,40 @@ class MarketTrade(commands.Cog):
                 continue
             lines.append(f"- `{symbol}`: {self._format_event_line(event_data)}")
         if not lines:
-            await ctx.send("There are no active events.")
+            if announce_channel_id:
+                await ctx.send(
+                    f"There are no active events.\nAnnouncement channel: <#{announce_channel_id}>"
+                )
+            else:
+                await ctx.send("There are no active events.\nAnnouncement channel: not set.")
             return
-        await ctx.send("Active events:\n" + "\n".join(lines))
+        announcement_line = (
+            f"Announcement channel: <#{announce_channel_id}>"
+            if announce_channel_id
+            else "Announcement channel: not set."
+        )
+        await ctx.send("Active events:\n" + "\n".join(lines) + f"\n{announcement_line}")
+
+    @market_event.command(name="channel")
+    async def market_event_channel(self, ctx, channel: discord.TextChannel = None):
+        """Show or set the channel used for event announcements."""
+        guild_conf = self.config.guild(ctx.guild)
+        if channel is None:
+            channel_id = int(await guild_conf.event_announce_channel_id())
+            if not channel_id:
+                await ctx.send("No event announcement channel is set.")
+                return
+            await ctx.send(f"Event announcement channel: <#{channel_id}>")
+            return
+
+        await guild_conf.event_announce_channel_id.set(channel.id)
+        await ctx.send(f"Event announcements will be posted in {channel.mention}.")
+
+    @market_event.command(name="clearchannel")
+    async def market_event_clearchannel(self, ctx):
+        """Disable event announcements by clearing the announce channel."""
+        await self.config.guild(ctx.guild).event_announce_channel_id.set(0)
+        await ctx.send("Event announcement channel cleared.")
 
     @market_event.command(name="start")
     async def market_event_start(self, ctx, symbol: str, percent_per_tick: float, ticks: int):
@@ -696,6 +770,10 @@ class MarketTrade(commands.Cog):
 
         await ctx.send(
             f"Event started for `{normalized_symbol}`: {round(percent_per_tick, 2)}% per tick for {ticks} tick(s)."
+        )
+        await self._announce_event_message(
+            ctx.guild.id,
+            f"Manual event started for `{normalized_symbol}`: {round(percent_per_tick, 2)}% per tick for {ticks} tick(s).",
         )
 
     @market_event.command(name="clear")

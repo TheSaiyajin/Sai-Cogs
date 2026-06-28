@@ -779,6 +779,72 @@ class MarketTrade(commands.Cog):
             self.config.guild(ctx.guild), normalized_symbol, round(new_price, 2)
         )
 
+    @market_asset.command(name="setminprice")
+    async def market_asset_setminprice(self, ctx, symbol: str, min_price: float):
+        """Set the minimum allowed price for an asset."""
+        await self._ensure_guild_initialized(ctx.guild.id)
+        normalized_symbol = self._normalize_symbol(symbol)
+        if min_price <= 0:
+            await ctx.send("Minimum price must be greater than 0.")
+            return
+
+        rounded_min_price = round(min_price, 2)
+        async with self.config.guild(ctx.guild).assets() as assets:
+            asset = assets.get(normalized_symbol)
+            if asset is None:
+                await ctx.send(f"`{normalized_symbol}` does not exist.")
+                return
+
+            current_max_price = round(float(asset.get("max_price", rounded_min_price)), 2)
+            if rounded_min_price > current_max_price:
+                await ctx.send(
+                    f"Minimum price cannot be greater than current max price ({humanize_number(current_max_price)})."
+                )
+                return
+
+            asset["min_price"] = rounded_min_price
+            current_price = round(float(asset.get("price", rounded_min_price)), 2)
+            if current_price < rounded_min_price:
+                asset["price"] = rounded_min_price
+            assets[normalized_symbol] = asset
+
+        await ctx.send(
+            f"`{normalized_symbol}` minimum price set to {humanize_number(rounded_min_price)}."
+        )
+
+    @market_asset.command(name="setmaxprice")
+    async def market_asset_setmaxprice(self, ctx, symbol: str, max_price: float):
+        """Set the maximum allowed price for an asset."""
+        await self._ensure_guild_initialized(ctx.guild.id)
+        normalized_symbol = self._normalize_symbol(symbol)
+        if max_price <= 0:
+            await ctx.send("Maximum price must be greater than 0.")
+            return
+
+        rounded_max_price = round(max_price, 2)
+        async with self.config.guild(ctx.guild).assets() as assets:
+            asset = assets.get(normalized_symbol)
+            if asset is None:
+                await ctx.send(f"`{normalized_symbol}` does not exist.")
+                return
+
+            current_min_price = round(float(asset.get("min_price", 1.0)), 2)
+            if rounded_max_price < current_min_price:
+                await ctx.send(
+                    f"Maximum price cannot be lower than current min price ({humanize_number(current_min_price)})."
+                )
+                return
+
+            asset["max_price"] = rounded_max_price
+            current_price = round(float(asset.get("price", rounded_max_price)), 2)
+            if current_price > rounded_max_price:
+                asset["price"] = rounded_max_price
+            assets[normalized_symbol] = asset
+
+        await ctx.send(
+            f"`{normalized_symbol}` maximum price set to {humanize_number(rounded_max_price)}."
+        )
+
     @market_asset.command(name="setvolatility")
     async def market_asset_setvolatility(self, ctx, symbol: str, percent: float):
         """Set max up/down change per update, in percent."""

@@ -14,49 +14,10 @@ class MarketTrade(commands.Cog):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=219084771503, force_registration=True)
         self.config.register_guild(
-            assets={
-                "BTC": {
-                    "name": "Bitcoin",
-                    "kind": "crypto",
-                    "price": 1200.0,
-                    "min_price": 100.0,
-                    "max_price": 100000.0,
-                    "volatility": 0.08,
-                    "risk": 1.2,
-                    "momentum": 0.68,
-                    "reversal_accel": 0.08,
-                    "trend": 0,
-                    "trend_streak": 0,
-                },
-                "ETH": {
-                    "name": "Ethereum",
-                    "kind": "crypto",
-                    "price": 700.0,
-                    "min_price": 50.0,
-                    "max_price": 50000.0,
-                    "volatility": 0.08,
-                    "risk": 1.15,
-                    "momentum": 0.66,
-                    "reversal_accel": 0.08,
-                    "trend": 0,
-                    "trend_streak": 0,
-                },
-                "AAPL": {
-                    "name": "Apple",
-                    "kind": "stock",
-                    "price": 350.0,
-                    "min_price": 10.0,
-                    "max_price": 10000.0,
-                    "volatility": 0.05,
-                    "risk": 1.0,
-                    "momentum": 0.58,
-                    "reversal_accel": 0.09,
-                    "trend": 0,
-                    "trend_streak": 0,
-                },
-            },
+            assets={},
             update_interval_minutes=10,
             last_update_ts=0.0,
+            seeded=False,
         )
         self.config.register_member(holdings={})
         self.price_updater.start()
@@ -67,6 +28,64 @@ class MarketTrade(commands.Cog):
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:
         return symbol.strip().upper()
+
+    def _build_default_assets(self):
+        return {
+            "BTC": {
+                "name": "Bitcoin",
+                "kind": "crypto",
+                "price": 1200.0,
+                "min_price": 100.0,
+                "max_price": 100000.0,
+                "volatility": 0.08,
+                "risk": 1.2,
+                "momentum": 0.68,
+                "reversal_accel": 0.08,
+                "trend": 0,
+                "trend_streak": 0,
+            },
+            "ETH": {
+                "name": "Ethereum",
+                "kind": "crypto",
+                "price": 700.0,
+                "min_price": 50.0,
+                "max_price": 50000.0,
+                "volatility": 0.08,
+                "risk": 1.15,
+                "momentum": 0.66,
+                "reversal_accel": 0.08,
+                "trend": 0,
+                "trend_streak": 0,
+            },
+            "AAPL": {
+                "name": "Apple",
+                "kind": "stock",
+                "price": 350.0,
+                "min_price": 10.0,
+                "max_price": 10000.0,
+                "volatility": 0.05,
+                "risk": 1.0,
+                "momentum": 0.58,
+                "reversal_accel": 0.09,
+                "trend": 0,
+                "trend_streak": 0,
+            },
+        }
+
+    async def _ensure_guild_initialized(self, guild_id: int):
+        guild_conf = self.config.guild_from_id(guild_id)
+        if await guild_conf.seeded():
+            return
+
+        async with guild_conf.assets() as assets:
+            if not assets:
+                assets.update(self._build_default_assets())
+
+        await guild_conf.seeded.set(True)
+
+    async def _get_assets(self, guild):
+        await self._ensure_guild_initialized(guild.id)
+        return await self.config.guild(guild).assets()
 
     @staticmethod
     def _default_asset_behavior(kind: str):
@@ -85,6 +104,7 @@ class MarketTrade(commands.Cog):
         }
 
     async def _update_guild_prices(self, guild_id: int):
+        await self._ensure_guild_initialized(guild_id)
         guild_conf = self.config.guild_from_id(guild_id)
         assets = await guild_conf.assets()
         if not assets:
@@ -162,7 +182,7 @@ class MarketTrade(commands.Cog):
     @market.command(name="prices")
     async def market_prices(self, ctx):
         """Show current asset prices."""
-        assets = await self.config.guild(ctx.guild).assets()
+        assets = await self._get_assets(ctx.guild)
         if not assets:
             await ctx.send("No assets configured yet.")
             return
@@ -185,7 +205,7 @@ class MarketTrade(commands.Cog):
             return
 
         normalized_symbol = self._normalize_symbol(symbol)
-        assets = await self.config.guild(ctx.guild).assets()
+        assets = await self._get_assets(ctx.guild)
         asset = assets.get(normalized_symbol)
         if asset is None:
             await ctx.send(f"Asset `{normalized_symbol}` does not exist.")
@@ -221,7 +241,7 @@ class MarketTrade(commands.Cog):
             return
 
         normalized_symbol = self._normalize_symbol(symbol)
-        assets = await self.config.guild(ctx.guild).assets()
+        assets = await self._get_assets(ctx.guild)
         asset = assets.get(normalized_symbol)
         if asset is None:
             await ctx.send(f"Asset `{normalized_symbol}` does not exist.")
@@ -255,7 +275,7 @@ class MarketTrade(commands.Cog):
             await ctx.send(f"{target.display_name} has no holdings.")
             return
 
-        assets = await self.config.guild(ctx.guild).assets()
+        assets = await self._get_assets(ctx.guild)
         total_value = 0
         lines = []
 
@@ -305,6 +325,7 @@ class MarketTrade(commands.Cog):
     @market_asset.command(name="add")
     async def market_asset_add(self, ctx, symbol: str, kind: str, starting_price: float, *, name: str):
         """Add a new tradable asset."""
+        await self._ensure_guild_initialized(ctx.guild.id)
         normalized_symbol = self._normalize_symbol(symbol)
         normalized_kind = kind.strip().lower()
         if normalized_kind not in {"crypto", "stock"}:
@@ -344,6 +365,7 @@ class MarketTrade(commands.Cog):
     @market_asset.command(name="remove")
     async def market_asset_remove(self, ctx, symbol: str):
         """Remove a tradable asset."""
+        await self._ensure_guild_initialized(ctx.guild.id)
         normalized_symbol = self._normalize_symbol(symbol)
 
         async with self.config.guild(ctx.guild).assets() as assets:
@@ -357,7 +379,7 @@ class MarketTrade(commands.Cog):
     @market_asset.command(name="list")
     async def market_asset_list(self, ctx):
         """List all tradable assets."""
-        assets = await self.config.guild(ctx.guild).assets()
+        assets = await self._get_assets(ctx.guild)
         if not assets:
             await ctx.send("No assets configured.")
             return
@@ -379,6 +401,7 @@ class MarketTrade(commands.Cog):
     @market_asset.command(name="setprice")
     async def market_asset_setprice(self, ctx, symbol: str, new_price: float):
         """Set an asset's current price."""
+        await self._ensure_guild_initialized(ctx.guild.id)
         normalized_symbol = self._normalize_symbol(symbol)
         if new_price <= 0:
             await ctx.send("Price must be greater than 0.")
@@ -399,6 +422,7 @@ class MarketTrade(commands.Cog):
     @market_asset.command(name="setvolatility")
     async def market_asset_setvolatility(self, ctx, symbol: str, percent: float):
         """Set max up/down change per update, in percent."""
+        await self._ensure_guild_initialized(ctx.guild.id)
         normalized_symbol = self._normalize_symbol(symbol)
         if percent <= 0 or percent > 100:
             await ctx.send("Volatility percent must be between 0 and 100.")
@@ -417,6 +441,7 @@ class MarketTrade(commands.Cog):
     @market_asset.command(name="setrisk")
     async def market_asset_setrisk(self, ctx, symbol: str, risk: float):
         """Set directional movement multiplier (higher = riskier trends)."""
+        await self._ensure_guild_initialized(ctx.guild.id)
         normalized_symbol = self._normalize_symbol(symbol)
         if risk < 0.2 or risk > 5:
             await ctx.send("Risk must be between 0.2 and 5.")
@@ -435,6 +460,7 @@ class MarketTrade(commands.Cog):
     @market_asset.command(name="setmomentum")
     async def market_asset_setmomentum(self, ctx, symbol: str, percent: float):
         """Set trend continuation chance. Higher means dips/pumps last longer."""
+        await self._ensure_guild_initialized(ctx.guild.id)
         normalized_symbol = self._normalize_symbol(symbol)
         if percent <= 0 or percent >= 100:
             await ctx.send("Momentum percent must be greater than 0 and less than 100.")

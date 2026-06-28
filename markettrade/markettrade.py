@@ -675,6 +675,38 @@ class MarketTrade(commands.Cog):
             "Use: `market asset setprofile <symbol> <profile>`"
         )
 
+    @market_asset.command(name="info")
+    async def market_asset_info(self, ctx, symbol: str):
+        """Show detailed configuration for one asset."""
+        assets = await self._get_assets(ctx.guild)
+        normalized_symbol = self._normalize_symbol(symbol)
+        asset = assets.get(normalized_symbol)
+        if asset is None:
+            await ctx.send(f"`{normalized_symbol}` does not exist.")
+            return
+
+        price = round(float(asset.get("price", 0.0)), 2)
+        min_price = round(float(asset.get("min_price", 1.0)), 2)
+        max_price = round(float(asset.get("max_price", min_price)), 2)
+        volatility_percent = round(float(asset.get("volatility", 0.0)) * 100, 2)
+        risk = round(float(asset.get("risk", 1.0)), 2)
+        momentum_percent = round(float(asset.get("momentum", 0.6)) * 100, 2)
+        reversal_accel_percent = round(float(asset.get("reversal_accel", 0.08)) * 100, 2)
+        drift_percent = round(float(asset.get("drift", 0.0)) * 100, 2)
+        bull_bias_percent = round(float(asset.get("bull_bias", 0.05)) * 100, 2)
+        trend = int(asset.get("trend", 0))
+        trend_streak = max(0, int(asset.get("trend_streak", 0)))
+        trend_text = "up" if trend > 0 else "down" if trend < 0 else "flat"
+
+        await ctx.send(
+            f"`{normalized_symbol}` ({asset.get('kind', 'unknown')}) {asset.get('name', 'Unknown')}:\n"
+            f"price={humanize_number(price)}\n"
+            f"min_price={humanize_number(min_price)} | max_price={humanize_number(max_price)}\n"
+            f"volatility={volatility_percent}% | risk={risk}x | momentum={momentum_percent}%\n"
+            f"reversal_accel={reversal_accel_percent}% | drift={drift_percent}% | bull_bias={bull_bias_percent}%\n"
+            f"trend={trend_text} | trend_streak={trend_streak}"
+        )
+
     @market_asset.command(name="setprofile")
     async def market_asset_setprofile(self, ctx, symbol: str, profile: str):
         """Apply a predefined behavior profile to an asset."""

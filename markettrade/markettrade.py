@@ -498,48 +498,115 @@ class MarketTrade(commands.Cog):
         )
 
     @market.command(name="sell")
-    async def market_sell(self, ctx, symbol: str, quantity: int):
-        """Sell an owned asset for bank credits."""
-        if quantity <= 0:
-            await ctx.send("Quantity must be at least 1.")
+    async def market_sell(self, ctx, symbol: str, quantity: str = None):
+        """Sell an owned asset for bank credits. Use `all` to sell everything."""
+        normalized_symbol = self._normalize_symbol(symbol)
+        member_conf = self.config.member(ctx.author)
+        assets = await self._get_assets(ctx.guild)
+
+        if normalized_symbol == "ALL":
+            total_gain = 0
+            total_realized_change = 0
+            sold_assets = 0
+            sold_units = 0
+
+            async with member_conf.holdings() as holdings, member_conf.cost_basis() as cost_basis, member_conf.realized_profit() as realized_profit:
+                for held_symbol, held_amount in list(holdings.items()):
+                    asset = assets.get(held_symbol)
+                    if asset is None:
+                        continue
+
+                    quantity_int = int(held_amount)
+                    if quantity_int <= 0:
+                        continue
+
+                    sell_price = float(asset["price"])
+                    gain_for_symbol = int(round(sell_price * quantity_int))
+                    if gain_for_symbol <= 0:
+                        gain_for_symbol = 1
+
+                    avg_buy_price = float(cost_basis.get(held_symbol, sell_price))
+                    realized_for_symbol = int(round((sell_price - avg_buy_price) * quantity_int))
+                    previous_realized = int(realized_profit.get(held_symbol, 0))
+                    realized_profit[held_symbol] = previous_realized + realized_for_symbol
+
+                    total_gain += gain_for_symbol
+                    total_realized_change += realized_for_symbol
+                    sold_assets += 1
+                    sold_units += quantity_int
+
+                    del holdings[held_symbol]
+                    if held_symbol in cost_basis:
+                        del cost_basis[held_symbol]
+
+            if sold_assets == 0:
+                await ctx.send("You have no tradable holdings to sell.")
+                return
+
+            await bank.deposit_credits(ctx.author, total_gain)
+            await ctx.send(
+                f"Sold all tradable holdings ({sold_units} units across {sold_assets} assets) "
+                f"for {humanize_number(total_gain)} credits. "
+                f"Realized P/L: {humanize_number(total_realized_change)} credits."
+            )
             return
 
-        normalized_symbol = self._normalize_symbol(symbol)
-        assets = await self._get_assets(ctx.guild)
         asset = assets.get(normalized_symbol)
         if asset is None:
             await ctx.send(f"Asset `{normalized_symbol}` does not exist.")
             return
 
-        member_conf = self.config.member(ctx.author)
+        if quantity is None:
+            await ctx.send("Please provide a quantity, or use `all`.")
+            return
+
+        quantity_value = quantity.strip().lower()
+        quantity_int = 0
+        if quantity_value == "all":
+            quantity_int = -1
+        else:
+            try:
+                quantity_int = int(quantity_value)
+            except ValueError:
+                await ctx.send("Quantity must be a number or `all`.")
+                return
+            if quantity_int <= 0:
+                await ctx.send("Quantity must be at least 1.")
+                return
+
         avg_buy_price = float(asset["price"])
-        async with member_conf.holdings() as holdings, member_conf.cost_basis() as cost_basis:
+        async with member_conf.holdings() as holdings, member_conf.cost_basis() as cost_basis, member_conf.realized_profit() as realized_profit:
             owned_amount = int(holdings.get(normalized_symbol, 0))
-            if owned_amount < quantity:
+            if quantity_int == -1:
+                quantity_int = owned_amount
+
+            if owned_amount < quantity_int:
+                await ctx.send(f"You only own {owned_amount} `{normalized_symbol}`.")
+                return
+            if quantity_int <= 0:
                 await ctx.send(f"You only own {owned_amount} `{normalized_symbol}`.")
                 return
 
             avg_buy_price = float(cost_basis.get(normalized_symbol, float(asset["price"])))
 
-            holdings[normalized_symbol] = owned_amount - quantity
+            holdings[normalized_symbol] = owned_amount - quantity_int
             if holdings[normalized_symbol] == 0:
                 del holdings[normalized_symbol]
                 if normalized_symbol in cost_basis:
                     del cost_basis[normalized_symbol]
 
-        sell_price = float(asset["price"])
-        total_gain = int(round(sell_price * quantity))
-        if total_gain <= 0:
-            total_gain = 1
-
-        realized_change = int(round((sell_price - avg_buy_price) * quantity))
-        async with member_conf.realized_profit() as realized_profit:
+            sell_price = float(asset["price"])
+            realized_change = int(round((sell_price - avg_buy_price) * quantity_int))
             previous_realized = int(realized_profit.get(normalized_symbol, 0))
             realized_profit[normalized_symbol] = previous_realized + realized_change
 
+        total_gain = int(round(float(asset["price"]) * quantity_int))
+        if total_gain <= 0:
+            total_gain = 1
+
         await bank.deposit_credits(ctx.author, total_gain)
         await ctx.send(
-            f"Sold {quantity} `{normalized_symbol}` for {humanize_number(total_gain)} credits. "
+            f"Sold {quantity_int} `{normalized_symbol}` for {humanize_number(total_gain)} credits. "
             f"Realized P/L: {humanize_number(realized_change)} credits."
         )
 

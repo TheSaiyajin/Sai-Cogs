@@ -19,6 +19,7 @@ class MarketTrade(commands.Cog):
             last_update_ts=0.0,
             seeded=False,
             prices_cache={},
+            live_prices_message={},
         )
         self.config.register_member(holdings={})
         self.price_updater.start()
@@ -87,6 +88,49 @@ class MarketTrade(commands.Cog):
     async def _get_assets(self, guild):
         await self._ensure_guild_initialized(guild.id)
         return await self.config.guild(guild).assets()
+
+    def _build_prices_text(self, assets):
+        lines = []
+        for symbol, asset in sorted(assets.items()):
+            trend = int(asset.get("trend", 0))
+            trend_icon = "↗️" if trend > 0 else "↘️" if trend < 0 else "➡️"
+            lines.append(
+                f"- `{symbol}` ({asset['kind']}) {asset['name']}: "
+                f"{humanize_number(asset['price'])} credits {trend_icon}"
+            )
+        return "Current prices:\n" + "\n".join(lines)
+
+    async def _update_live_prices_message(self, guild_id: int):
+        guild_conf = self.config.guild_from_id(guild_id)
+        live_data = await guild_conf.live_prices_message()
+        channel_id = int(live_data.get("channel_id", 0))
+        message_id = int(live_data.get("message_id", 0))
+        if not channel_id or not message_id:
+            return
+
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            await guild_conf.live_prices_message.set({})
+            return
+
+        assets = await guild_conf.assets()
+        if not assets:
+            return
+
+        prices_text = self._build_prices_text(assets)
+        try:
+            message = await channel.fetch_message(message_id)
+        except discord.NotFound:
+            await guild_conf.live_prices_message.set({})
+            return
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+        await message.edit(content=prices_text)
 
     @staticmethod
     def _default_asset_behavior(kind: str):
@@ -167,7 +211,9 @@ class MarketTrade(commands.Cog):
             interval_minutes = int(data.get("update_interval_minutes", 10))
             last_update_ts = float(data.get("last_update_ts", 0.0))
             if now - last_update_ts >= interval_minutes * 60:
-                await self._update_guild_prices(int(guild_id))
+                parsed_guild_id = int(guild_id)
+                await self._update_guild_prices(parsed_guild_id)
+                await self._update_live_prices_message(parsed_guild_id)
 
     @price_updater.before_loop
     async def before_price_updater(self):
@@ -188,15 +234,7 @@ class MarketTrade(commands.Cog):
             await ctx.send("No assets configured yet.")
             return
 
-        lines = []
-        for symbol, asset in sorted(assets.items()):
-            trend = int(asset.get("trend", 0))
-            trend_icon = "↗️" if trend > 0 else "↘️" if trend < 0 else "➡️"
-            lines.append(
-                f"- `{symbol}` ({asset['kind']}) {asset['name']}: "
-                f"{humanize_number(asset['price'])} credits {trend_icon}"
-            )
-        prices_text = "Current prices:\n" + "\n".join(lines)
+        prices_text = self._build_prices_text(assets)
         now = time.time()
         channel_key = str(ctx.channel.id)
         cache = await self.config.guild(ctx.guild).prices_cache()
@@ -340,7 +378,24 @@ class MarketTrade(commands.Cog):
     async def market_tick(self, ctx):
         """Force an immediate price update for this server."""
         await self._update_guild_prices(ctx.guild.id)
+        await self._update_live_prices_message(ctx.guild.id)
         await ctx.send("Prices updated.")
+
+    @market.command(name="liveprices")
+    @commands.admin_or_permissions(manage_guild=True)
+    async def market_liveprices(self, ctx):
+        """Post a live prices message that auto-updates every market interval."""
+        assets = await self._get_assets(ctx.guild)
+        if not assets:
+            await ctx.send("No assets configured yet.")
+            return
+
+        prices_text = self._build_prices_text(assets)
+        live_message = await ctx.send(prices_text)
+        await self.config.guild(ctx.guild).live_prices_message.set(
+            {"channel_id": ctx.channel.id, "message_id": live_message.id}
+        )
+        await ctx.send("Live prices message created. I will update it every market interval.")
 
     @market.group(name="asset")
     @commands.admin_or_permissions(manage_guild=True)

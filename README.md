@@ -43,6 +43,7 @@ Once this repo is pushed to GitHub, you can install it in Red with:
 - `[p]market portfolio [member]`
 - `[p]market interval <minutes>` (admin)
 - `[p]market tick` (admin, force immediate update)
+- `[p]market liveprices` (admin, creates one message that auto-edits every interval)
 - `[p]market asset add <symbol> <crypto|stock> <starting_price> <name...>` (admin)
 - `[p]market asset remove <symbol>` (admin)
 - `[p]market asset list` (admin)

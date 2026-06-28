@@ -21,6 +21,9 @@ class MarketTrade(commands.Cog):
             prices_cache={},
             live_prices_message={},
             price_history={},
+            active_events={},
+            random_events_enabled=True,
+            random_event_chance_percent=6.0,
         )
         self.config.register_member(holdings={}, cost_basis={}, realized_profit={})
         self.price_updater.start()
@@ -120,16 +123,48 @@ class MarketTrade(commands.Cog):
         for symbol, asset in assets.items():
             await self._append_price_history(guild_conf, symbol, float(asset["price"]))
 
-    def _build_prices_text(self, assets):
+    @staticmethod
+    def _format_event_line(event_data):
+        change_percent = round(float(event_data.get("change_per_tick", 0.0)) * 100, 2)
+        remaining_ticks = max(0, int(event_data.get("remaining_ticks", 0)))
+        direction = "+" if change_percent >= 0 else ""
+        return f"⚡ {direction}{change_percent}% x {remaining_ticks} tick(s)"
+
+    def _build_prices_text(self, assets, active_events=None):
+        active_events = active_events or {}
         lines = []
         for symbol, asset in sorted(assets.items()):
             trend = int(asset.get("trend", 0))
             trend_icon = "↗️" if trend > 0 else "↘️" if trend < 0 else "➡️"
+            event_text = ""
+            event_data = active_events.get(symbol)
+            if isinstance(event_data, dict):
+                event_text = f" | {self._format_event_line(event_data)}"
             lines.append(
                 f"- `{symbol}` ({asset['kind']}) {asset['name']}: "
-                f"{humanize_number(asset['price'])} credits {trend_icon}"
+                f"{humanize_number(asset['price'])} credits {trend_icon}{event_text}"
             )
         return "Current prices:\n" + "\n".join(lines)
+
+    @staticmethod
+    def _roll_random_event(active_events, assets, chance_percent: float):
+        chance = min(100.0, max(0.0, float(chance_percent))) / 100.0
+        if random.random() >= chance:
+            return active_events
+
+        available_symbols = [symbol for symbol in assets.keys() if symbol not in active_events]
+        if not available_symbols:
+            return active_events
+
+        selected_symbol = random.choice(available_symbols)
+        random_percent = round(random.uniform(3.0, 10.0), 2)
+        signed_percent = random_percent if random.random() < 0.5 else random_percent * -1
+        active_events[selected_symbol] = {
+            "change_per_tick": round(signed_percent / 100.0, 4),
+            "remaining_ticks": random.randint(2, 10),
+            "source": "random",
+        }
+        return active_events
 
     async def _update_live_prices_message(self, guild_id: int):
         guild_conf = self.config.guild_from_id(guild_id)
@@ -152,7 +187,8 @@ class MarketTrade(commands.Cog):
         if not assets:
             return
 
-        prices_text = self._build_prices_text(assets)
+        active_events = await guild_conf.active_events()
+        prices_text = self._build_prices_text(assets, active_events)
         try:
             message = await channel.fetch_message(message_id)
         except discord.NotFound:
@@ -237,8 +273,26 @@ class MarketTrade(commands.Cog):
             await guild_conf.last_update_ts.set(time.time())
             return
 
+        active_events = await guild_conf.active_events()
+        active_events = {
+            symbol: event_data
+            for symbol, event_data in active_events.items()
+            if symbol in assets and isinstance(event_data, dict)
+        }
+        random_events_enabled = bool(await guild_conf.random_events_enabled())
+        random_event_chance_percent = float(await guild_conf.random_event_chance_percent())
+        if random_events_enabled:
+            active_events = self._roll_random_event(active_events, assets, random_event_chance_percent)
+
         updated_assets = {}
         for symbol, asset in assets.items():
+            event_data = active_events.get(symbol)
+            event_change = 0.0
+            event_remaining_ticks = 0
+            if isinstance(event_data, dict):
+                event_change = float(event_data.get("change_per_tick", 0.0))
+                event_remaining_ticks = max(0, int(event_data.get("remaining_ticks", 0)))
+
             current_price = float(asset["price"])
             volatility = float(asset.get("volatility", 0.08))
             risk = max(0.2, float(asset.get("risk", 1.0)))
@@ -272,6 +326,8 @@ class MarketTrade(commands.Cog):
             change = (directional_move * trend) + noise + drift
             if change * trend < 0:
                 change = trend * abs(change) * 0.35
+            change += event_change
+            change = max(-0.95, min(0.95, change))
 
             new_price = current_price * (1.0 + change)
             clamped_price = max(min_price, min(max_price, new_price))
@@ -286,7 +342,16 @@ class MarketTrade(commands.Cog):
                 updated_asset["trend_streak"] = trend_streak + 1
             updated_assets[symbol] = updated_asset
 
+            if symbol in active_events:
+                if event_remaining_ticks <= 1:
+                    del active_events[symbol]
+                else:
+                    next_event_data = dict(active_events[symbol])
+                    next_event_data["remaining_ticks"] = event_remaining_ticks - 1
+                    active_events[symbol] = next_event_data
+
         await guild_conf.assets.set(updated_assets)
+        await guild_conf.active_events.set(active_events)
         await self._record_prices_snapshot(guild_conf, updated_assets)
         await guild_conf.last_update_ts.set(time.time())
 
@@ -322,7 +387,8 @@ class MarketTrade(commands.Cog):
             await ctx.send("No assets configured yet.")
             return
 
-        prices_text = self._build_prices_text(assets)
+        active_events = await self.config.guild(ctx.guild).active_events()
+        prices_text = self._build_prices_text(assets, active_events)
         now = time.time()
         channel_key = str(ctx.channel.id)
         cache = await self.config.guild(ctx.guild).prices_cache()
@@ -568,12 +634,102 @@ class MarketTrade(commands.Cog):
             await ctx.send("No assets configured yet.")
             return
 
-        prices_text = self._build_prices_text(assets)
+        active_events = await self.config.guild(ctx.guild).active_events()
+        prices_text = self._build_prices_text(assets, active_events)
         live_message = await ctx.send(prices_text)
         await self.config.guild(ctx.guild).live_prices_message.set(
             {"channel_id": ctx.channel.id, "message_id": live_message.id}
         )
         await ctx.send("Live prices message created. I will update it every market interval.")
+
+    @market.group(name="event", case_insensitive=True)
+    @commands.admin_or_permissions(manage_guild=True)
+    async def market_event(self, ctx):
+        """Manage temporary market events."""
+        if ctx.invoked_subcommand is None:
+            await ctx.send_help()
+
+    @market_event.command(name="list")
+    async def market_event_list(self, ctx):
+        """List active market events."""
+        active_events = await self.config.guild(ctx.guild).active_events()
+        if not active_events:
+            await ctx.send("There are no active events.")
+            return
+
+        lines = []
+        for symbol, event_data in sorted(active_events.items()):
+            if not isinstance(event_data, dict):
+                continue
+            lines.append(f"- `{symbol}`: {self._format_event_line(event_data)}")
+        if not lines:
+            await ctx.send("There are no active events.")
+            return
+        await ctx.send("Active events:\n" + "\n".join(lines))
+
+    @market_event.command(name="start")
+    async def market_event_start(self, ctx, symbol: str, percent_per_tick: float, ticks: int):
+        """Start a timed event for an asset (max 10 ticks)."""
+        await self._ensure_guild_initialized(ctx.guild.id)
+        normalized_symbol = self._normalize_symbol(symbol)
+        if percent_per_tick == 0:
+            await ctx.send("Percent per tick must not be 0.")
+            return
+        if percent_per_tick < -50 or percent_per_tick > 50:
+            await ctx.send("Percent per tick must be between -50 and 50.")
+            return
+        if ticks < 1 or ticks > 10:
+            await ctx.send("Ticks must be between 1 and 10.")
+            return
+
+        async with self.config.guild(ctx.guild).assets() as assets, self.config.guild(
+            ctx.guild
+        ).active_events() as active_events:
+            if normalized_symbol not in assets:
+                await ctx.send(f"`{normalized_symbol}` does not exist.")
+                return
+            active_events[normalized_symbol] = {
+                "change_per_tick": round(percent_per_tick / 100.0, 4),
+                "remaining_ticks": ticks,
+                "source": "manual",
+            }
+
+        await ctx.send(
+            f"Event started for `{normalized_symbol}`: {round(percent_per_tick, 2)}% per tick for {ticks} tick(s)."
+        )
+
+    @market_event.command(name="clear")
+    async def market_event_clear(self, ctx, symbol: str = None):
+        """Clear one active event or all active events."""
+        async with self.config.guild(ctx.guild).active_events() as active_events:
+            if symbol is None:
+                active_events.clear()
+                await ctx.send("Cleared all active events.")
+                return
+
+            normalized_symbol = self._normalize_symbol(symbol)
+            if normalized_symbol not in active_events:
+                await ctx.send(f"No active event found for `{normalized_symbol}`.")
+                return
+
+            del active_events[normalized_symbol]
+        await ctx.send(f"Cleared active event for `{normalized_symbol}`.")
+
+    @market_event.command(name="random")
+    async def market_event_random(self, ctx, enabled: bool):
+        """Enable or disable automatic random events."""
+        await self.config.guild(ctx.guild).random_events_enabled.set(enabled)
+        state = "enabled" if enabled else "disabled"
+        await ctx.send(f"Automatic random events are now {state}.")
+
+    @market_event.command(name="chance")
+    async def market_event_chance(self, ctx, percent: float):
+        """Set random event chance percent per update tick."""
+        if percent < 0 or percent > 100:
+            await ctx.send("Chance percent must be between 0 and 100.")
+            return
+        await self.config.guild(ctx.guild).random_event_chance_percent.set(round(percent, 2))
+        await ctx.send(f"Random event chance set to {round(percent, 2)}% per update tick.")
 
     @market.group(name="asset", case_insensitive=True)
     @commands.admin_or_permissions(manage_guild=True)

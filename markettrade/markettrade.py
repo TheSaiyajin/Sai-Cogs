@@ -22,7 +22,7 @@ class MarketTrade(commands.Cog):
             live_prices_message={},
             price_history={},
         )
-        self.config.register_member(holdings={})
+        self.config.register_member(holdings={}, cost_basis={}, realized_profit={})
         self.price_updater.start()
 
     def cog_unload(self):
@@ -316,9 +316,17 @@ class MarketTrade(commands.Cog):
 
         await bank.withdraw_credits(ctx.author, total_cost)
 
-        async with self.config.member(ctx.author).holdings() as holdings:
+        fill_price = float(asset["price"])
+        member_conf = self.config.member(ctx.author)
+        async with member_conf.holdings() as holdings, member_conf.cost_basis() as cost_basis:
             current_amount = int(holdings.get(normalized_symbol, 0))
-            holdings[normalized_symbol] = current_amount + quantity
+            current_avg_price = float(cost_basis.get(normalized_symbol, fill_price))
+            new_amount = current_amount + quantity
+            holdings[normalized_symbol] = new_amount
+
+            if new_amount > 0:
+                total_cost_basis = (current_amount * current_avg_price) + (quantity * fill_price)
+                cost_basis[normalized_symbol] = round(total_cost_basis / new_amount, 4)
 
         await ctx.send(
             f"Bought {quantity} `{normalized_symbol}` for {humanize_number(total_cost)} credits."
@@ -338,36 +346,55 @@ class MarketTrade(commands.Cog):
             await ctx.send(f"Asset `{normalized_symbol}` does not exist.")
             return
 
-        async with self.config.member(ctx.author).holdings() as holdings:
+        member_conf = self.config.member(ctx.author)
+        avg_buy_price = float(asset["price"])
+        async with member_conf.holdings() as holdings, member_conf.cost_basis() as cost_basis:
             owned_amount = int(holdings.get(normalized_symbol, 0))
             if owned_amount < quantity:
                 await ctx.send(f"You only own {owned_amount} `{normalized_symbol}`.")
                 return
 
+            avg_buy_price = float(cost_basis.get(normalized_symbol, float(asset["price"])))
+
             holdings[normalized_symbol] = owned_amount - quantity
             if holdings[normalized_symbol] == 0:
                 del holdings[normalized_symbol]
+                if normalized_symbol in cost_basis:
+                    del cost_basis[normalized_symbol]
 
-        total_gain = int(round(float(asset["price"]) * quantity))
+        sell_price = float(asset["price"])
+        total_gain = int(round(sell_price * quantity))
         if total_gain <= 0:
             total_gain = 1
 
+        realized_change = int(round((sell_price - avg_buy_price) * quantity))
+        async with member_conf.realized_profit() as realized_profit:
+            previous_realized = int(realized_profit.get(normalized_symbol, 0))
+            realized_profit[normalized_symbol] = previous_realized + realized_change
+
         await bank.deposit_credits(ctx.author, total_gain)
         await ctx.send(
-            f"Sold {quantity} `{normalized_symbol}` for {humanize_number(total_gain)} credits."
+            f"Sold {quantity} `{normalized_symbol}` for {humanize_number(total_gain)} credits. "
+            f"Realized P/L: {humanize_number(realized_change)} credits."
         )
 
     @market.command(name="portfolio")
     async def market_portfolio(self, ctx, member: discord.Member = None):
         """Show a member's holdings and estimated value."""
         target = member or ctx.author
-        holdings = await self.config.member(target).holdings()
+        member_conf = self.config.member(target)
+        holdings = await member_conf.holdings()
         if not holdings:
             await ctx.send(f"{target.display_name} has no holdings.")
             return
 
+        cost_basis = await member_conf.cost_basis()
+        realized_profit = await member_conf.realized_profit()
         assets = await self._get_assets(ctx.guild)
         total_value = 0
+        total_cost_basis_value = 0
+        total_unrealized = 0
+        total_realized = 0
         lines = []
 
         for symbol, amount in sorted(holdings.items()):
@@ -376,16 +403,44 @@ class MarketTrade(commands.Cog):
                 lines.append(f"- `{symbol}`: {amount} (delisted)")
                 continue
 
-            value = int(round(float(asset["price"]) * int(amount)))
+            amount_int = int(amount)
+            current_price = float(asset["price"])
+            value = int(round(current_price * amount_int))
             total_value += value
+
+            avg_buy_price = cost_basis.get(symbol)
+            realized_for_symbol = int(realized_profit.get(symbol, 0))
+            total_realized += realized_for_symbol
+
+            if avg_buy_price is None:
+                lines.append(
+                    f"- `{symbol}`: {amount_int} @ {humanize_number(current_price)} = {humanize_number(value)} | "
+                    f"avg buy: n/a | unrealized P/L: n/a | realized P/L: {humanize_number(realized_for_symbol)}"
+                )
+                continue
+
+            avg_buy_price = float(avg_buy_price)
+            basis_value = int(round(avg_buy_price * amount_int))
+            unrealized = value - basis_value
+            unrealized_percent = 0.0 if basis_value == 0 else (unrealized / basis_value) * 100
+
+            total_cost_basis_value += basis_value
+            total_unrealized += unrealized
+
             lines.append(
-                f"- `{symbol}`: {amount} @ {humanize_number(asset['price'])} = {humanize_number(value)}"
+                f"- `{symbol}`: {amount_int} @ {humanize_number(current_price)} = {humanize_number(value)} | "
+                f"avg buy: {humanize_number(round(avg_buy_price, 2))} | "
+                f"unrealized P/L: {humanize_number(unrealized)} ({round(unrealized_percent, 2)}%) | "
+                f"realized P/L: {humanize_number(realized_for_symbol)}"
             )
 
         await ctx.send(
             f"{target.display_name}'s portfolio:\n"
             + "\n".join(lines)
             + f"\nEstimated total value: {humanize_number(total_value)} credits"
+            + f"\nTotal cost basis: {humanize_number(total_cost_basis_value)} credits"
+            + f"\nTotal unrealized P/L: {humanize_number(total_unrealized)} credits"
+            + f"\nTotal realized P/L: {humanize_number(total_realized)} credits"
         )
 
     @market.command(name="graph")

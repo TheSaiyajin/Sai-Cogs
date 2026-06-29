@@ -1369,6 +1369,88 @@ class MarketTrade(commands.Cog):
         
         await ctx.send("\n".join(lines))
 
+    @market.group(name="admin", case_insensitive=True)
+    @commands.admin_or_permissions(manage_guild=True)
+    async def market_admin(self, ctx):
+        """Admin commands for market management."""
+        if ctx.invoked_subcommand is None:
+            await ctx.send_help()
+
+    @market_admin.command(name="deposit")
+    async def market_admin_deposit(self, ctx, member: discord.Member, symbol: str, quantity: int):
+        """Deposit crypto/stocks to a member's holdings. Usage: !!market admin deposit @user VIL 100"""
+        if quantity <= 0:
+            await ctx.send("❌ Quantity must be positive")
+            return
+        
+        symbol = symbol.upper()
+        assets = await self._get_assets(ctx.guild)
+        
+        if symbol not in assets:
+            await ctx.send(f"❌ Asset `{symbol}` not found. Available: {', '.join(assets.keys())}")
+            return
+        
+        member_conf = self.config.member(member)
+        async with member_conf.holdings() as holdings:
+            current = int(holdings.get(symbol, 0))
+            holdings[symbol] = current + quantity
+        
+        await ctx.send(f"✅ Deposited **{quantity}** `{symbol}` to {member.mention}\n"
+                      f"New balance: {current + quantity}")
+
+    @market_admin.command(name="remove")
+    async def market_admin_remove(self, ctx, member: discord.Member, symbol: str, quantity: int):
+        """Remove crypto/stocks from a member's holdings. Usage: !!market admin remove @user VIL 50"""
+        if quantity <= 0:
+            await ctx.send("❌ Quantity must be positive")
+            return
+        
+        symbol = symbol.upper()
+        assets = await self._get_assets(ctx.guild)
+        
+        if symbol not in assets:
+            await ctx.send(f"❌ Asset `{symbol}` not found. Available: {', '.join(assets.keys())}")
+            return
+        
+        member_conf = self.config.member(member)
+        async with member_conf.holdings() as holdings:
+            current = int(holdings.get(symbol, 0))
+            if current < quantity:
+                await ctx.send(f"❌ Cannot remove {quantity} `{symbol}` (only has {current})")
+                return
+            holdings[symbol] = current - quantity
+            if holdings[symbol] == 0:
+                del holdings[symbol]
+        
+        await ctx.send(f"✅ Removed **{quantity}** `{symbol}` from {member.mention}\n"
+                      f"Remaining balance: {current - quantity}")
+
+    @market_admin.command(name="set")
+    async def market_admin_set(self, ctx, member: discord.Member, symbol: str, quantity: int):
+        """Set exact crypto/stocks balance for a member. Usage: !!market admin set @user VIL 500"""
+        if quantity < 0:
+            await ctx.send("❌ Quantity cannot be negative")
+            return
+        
+        symbol = symbol.upper()
+        assets = await self._get_assets(ctx.guild)
+        
+        if symbol not in assets:
+            await ctx.send(f"❌ Asset `{symbol}` not found. Available: {', '.join(assets.keys())}")
+            return
+        
+        member_conf = self.config.member(member)
+        async with member_conf.holdings() as holdings:
+            old_qty = int(holdings.get(symbol, 0))
+            if quantity == 0:
+                if symbol in holdings:
+                    del holdings[symbol]
+            else:
+                holdings[symbol] = quantity
+        
+        await ctx.send(f"✅ Set {member.mention}'s `{symbol}` balance to **{quantity}**\n"
+                      f"Previous balance: {old_qty}")
+
     @market.command(name="triggerorders")
     @commands.admin_or_permissions(manage_guild=True)
     async def market_triggerorders(self, ctx):

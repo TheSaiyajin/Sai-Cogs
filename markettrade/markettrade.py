@@ -321,83 +321,91 @@ class MarketTrade(commands.Cog):
 
     async def _process_auto_orders(self, guild_id: int):
         """Process all auto-buy and auto-sell orders for all members in the guild."""
-        guild_conf = self.config.guild_from_id(guild_id)
-        assets = await guild_conf.assets()
-        if not assets:
-           return
+        try:
+           guild_conf = self.config.guild_from_id(guild_id)
+           assets = await guild_conf.assets()
+           if not assets:
+               return
 
-        all_members = await self.config.all_members(guild_id)
-        guild = self.bot.get_guild(guild_id)
-        if guild is None:
-           return
+           all_members = await self.config.all_members(guild_id)
+           if not all_members:
+               return
 
-        for member_id, member_data in all_members.items():
-           auto_orders = member_data.get("auto_orders", {})
-           if not auto_orders:
-               continue
+           guild = self.bot.get_guild(guild_id)
+           if guild is None:
+               return
 
-           try:
-               member_id_int = int(member_id)
-               member = await self.bot.fetch_user(member_id_int)
-           except (discord.NotFound, ValueError):
-               continue
-
-           member_conf = self.config.member_from_ids(guild_id, int(member_id))
-           holdings = await member_conf.holdings()
-
-           for order_id, order in list(auto_orders.items()):
-               order_type = order.get("type")
-               symbol = order.get("symbol", "").upper()
-               target_price = float(order.get("target_price", 0))
-               quantity = int(order.get("quantity", 0))
-
-               if symbol not in assets or target_price <= 0 or (quantity <= 0 and quantity != -1):
+           for member_id, member_data in all_members.items():
+               auto_orders = member_data.get("auto_orders", {})
+               if not auto_orders:
                    continue
 
-               asset = assets[symbol]
-               current_price = float(asset.get("price", 0))
+               try:
+                   member_id_int = int(member_id)
+                   member = await self.bot.fetch_user(member_id_int)
+               except (discord.NotFound, ValueError, TypeError):
+                   continue
 
-               if order_type == "buy":
-                   if current_price <= target_price:
-                       total_cost = int(round(current_price * quantity))
-                       if total_cost <= 0:
-                           total_cost = 1
-                       if not await bank.can_spend(member, total_cost):
-                           continue
-                       await bank.withdraw_credits(member, total_cost)
-                       async with member_conf.holdings() as hld, member_conf.cost_basis() as cb:
-                           current_amount = int(hld.get(symbol, 0))
-                           current_avg_price = float(cb.get(symbol, current_price))
-                           new_amount = current_amount + quantity
-                           hld[symbol] = new_amount
-                           if new_amount > 0:
-                               total_cost_basis = (current_amount * current_avg_price) + (quantity * current_price)
-                               cb[symbol] = round(total_cost_basis / new_amount, 4)
-                       del auto_orders[order_id]
+               member_conf = self.config.member_from_ids(guild_id, member_id_int)
+               holdings = await member_conf.holdings()
 
-               elif order_type == "sell":
-                   if current_price >= target_price:
-                       owned_amount = int(holdings.get(symbol, 0))
-                       quantity_to_sell = owned_amount if quantity == -1 else quantity
-                       if owned_amount >= quantity_to_sell and quantity_to_sell > 0:
-                           async with member_conf.holdings() as hld, member_conf.cost_basis() as cb, member_conf.realized_profit() as rp:
+               for order_id, order in list(auto_orders.items()):
+                   order_type = order.get("type")
+                   symbol = order.get("symbol", "").upper()
+                   target_price = float(order.get("target_price", 0))
+                   quantity = int(order.get("quantity", 0))
+
+                   if symbol not in assets or target_price <= 0 or (quantity <= 0 and quantity != -1):
+                       continue
+
+                   asset = assets[symbol]
+                   current_price = float(asset.get("price", 0))
+
+                   if order_type == "buy":
+                       if current_price <= target_price:
+                           total_cost = int(round(current_price * quantity))
+                           if total_cost <= 0:
+                               total_cost = 1
+                           if not await bank.can_spend(member, total_cost):
+                               continue
+                           await bank.withdraw_credits(member, total_cost)
+                           async with member_conf.holdings() as hld, member_conf.cost_basis() as cb:
                                current_amount = int(hld.get(symbol, 0))
-                               avg_buy_price = float(cb.get(symbol, current_price))
-                               realized_change = int(round((current_price - avg_buy_price) * quantity_to_sell))
-                               previous_realized = int(rp.get(symbol, 0))
-                               rp[symbol] = previous_realized + realized_change
-                               hld[symbol] = current_amount - quantity_to_sell
-                               if hld[symbol] == 0:
-                                   del hld[symbol]
-                                   if symbol in cb:
-                                       del cb[symbol]
-                               total_gain = int(round(current_price * quantity_to_sell))
-                               if total_gain <= 0:
-                                   total_gain = 1
-                               await bank.deposit_credits(member, total_gain)
+                               current_avg_price = float(cb.get(symbol, current_price))
+                               new_amount = current_amount + quantity
+                               hld[symbol] = new_amount
+                               if new_amount > 0:
+                                   total_cost_basis = (current_amount * current_avg_price) + (quantity * current_price)
+                                   cb[symbol] = round(total_cost_basis / new_amount, 4)
                            del auto_orders[order_id]
 
-           await member_conf.auto_orders.set(auto_orders)
+                   elif order_type == "sell":
+                       if current_price >= target_price:
+                           owned_amount = int(holdings.get(symbol, 0))
+                           quantity_to_sell = owned_amount if quantity == -1 else quantity
+                           if owned_amount >= quantity_to_sell and quantity_to_sell > 0:
+                               async with member_conf.holdings() as hld, member_conf.cost_basis() as cb, member_conf.realized_profit() as rp:
+                                   current_amount = int(hld.get(symbol, 0))
+                                   avg_buy_price = float(cb.get(symbol, current_price))
+                                   realized_change = int(round((current_price - avg_buy_price) * quantity_to_sell))
+                                   previous_realized = int(rp.get(symbol, 0))
+                                   rp[symbol] = previous_realized + realized_change
+                                   hld[symbol] = current_amount - quantity_to_sell
+                                   if hld[symbol] == 0:
+                                       del hld[symbol]
+                                       if symbol in cb:
+                                           del cb[symbol]
+                                   total_gain = int(round(current_price * quantity_to_sell))
+                                   if total_gain <= 0:
+                                       total_gain = 1
+                                   await bank.deposit_credits(member, total_gain)
+                               del auto_orders[order_id]
+
+               await member_conf.auto_orders.set(auto_orders)
+        except Exception as e:
+           print(f"Error in _process_auto_orders: {e}")
+           import traceback
+           traceback.print_exc()
 
     async def _update_guild_prices(self, guild_id: int):
         await self._ensure_guild_initialized(guild_id)

@@ -1,5 +1,6 @@
 import random
 import time
+import traceback
 
 import discord
 from redbot.core import Config, bank, commands
@@ -1270,6 +1271,17 @@ class MarketTrade(commands.Cog):
                         lines.append(f"❌ **Would NOT execute** (not enough holdings: {owned} < {qty_to_sell})")
         
         await ctx.send("\n".join(lines))
+
+    @market.command(name="triggerorders")
+    @commands.admin_or_permissions(manage_guild=True)
+    async def market_triggerorders(self, ctx):
+        """Manually trigger auto-order processing for testing."""
+        await ctx.send("🔄 Processing auto-orders now...")
+        try:
+            await self._process_auto_orders(ctx.guild.id)
+            await ctx.send("✅ Auto-orders processed! Check your DMs for execution notices.")
+        except Exception as e:
+            await ctx.send(f"❌ Error: {e}\n```{traceback.format_exc()}```")
 
     @market.command(name="liveprices")
     @commands.admin_or_permissions(manage_guild=True)

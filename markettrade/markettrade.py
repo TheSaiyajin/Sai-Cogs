@@ -519,13 +519,18 @@ class MarketTrade(commands.Cog):
         now = time.time()
 
         for guild_id, data in all_guilds.items():
-            interval_minutes = int(data.get("update_interval_minutes", 10))
-            last_update_ts = float(data.get("last_update_ts", 0.0))
-            if now - last_update_ts >= interval_minutes * 60:
-                parsed_guild_id = int(guild_id)
-                await self._process_auto_orders(parsed_guild_id)
-                await self._update_guild_prices(parsed_guild_id)
-                await self._update_live_prices_message(parsed_guild_id)
+           try:
+               interval_minutes = int(data.get("update_interval_minutes", 10))
+               last_update_ts = float(data.get("last_update_ts", 0.0))
+               if now - last_update_ts >= interval_minutes * 60:
+                   parsed_guild_id = int(guild_id)
+                   await self._process_auto_orders(parsed_guild_id)
+                   await self._update_guild_prices(parsed_guild_id)
+                   await self._update_live_prices_message(parsed_guild_id)
+           except Exception as e:
+               print(f"Error in price_updater for guild {guild_id}: {e}")
+               import traceback
+               traceback.print_exc()
 
     @price_updater.before_loop
     async def before_price_updater(self):
@@ -1111,9 +1116,15 @@ class MarketTrade(commands.Cog):
     @commands.admin_or_permissions(manage_guild=True)
     async def market_tick(self, ctx):
         """Force an immediate price update for this server."""
-        await self._update_guild_prices(ctx.guild.id)
-        await self._update_live_prices_message(ctx.guild.id)
-        await ctx.send("Prices updated.")
+        try:
+            await self._process_auto_orders(ctx.guild.id)
+            await self._update_guild_prices(ctx.guild.id)
+            await self._update_live_prices_message(ctx.guild.id)
+            await ctx.send("✅ Prices updated.")
+        except Exception as e:
+            await ctx.send(f"❌ Error during price update: {e}")
+            import traceback
+            traceback.print_exc()
 
     @market.command(name="liveprices")
     @commands.admin_or_permissions(manage_guild=True)

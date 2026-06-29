@@ -286,6 +286,39 @@ class MarketTrade(commands.Cog):
         }
         return profiles.get(profile)
 
+    def _detect_asset_profile(self, kind: str, asset: dict) -> str:
+        """Detect which profile an asset matches, or return 'custom' if none match."""
+        asset_volatility = round(float(asset.get("volatility", 0.0)), 4)
+        asset_risk = round(float(asset.get("risk", 1.0)), 2)
+        asset_momentum = round(float(asset.get("momentum", 0.6)), 4)
+        asset_reversal_accel = round(float(asset.get("reversal_accel", 0.08)), 4)
+        asset_drift = round(float(asset.get("drift", 0.0)), 4)
+        asset_bull_bias = round(float(asset.get("bull_bias", 0.05)), 4)
+
+        for profile_name in ["stable", "wild", "uptrend", "downtrend", "swing"]:
+            profile_data = self._behavior_profile(kind, profile_name)
+            if profile_data is None:
+                continue
+
+            prof_volatility = round(float(profile_data.get("volatility", 0.0)), 4)
+            prof_risk = round(float(profile_data.get("risk", 1.0)), 2)
+            prof_momentum = round(float(profile_data.get("momentum", 0.6)), 4)
+            prof_reversal_accel = round(float(profile_data.get("reversal_accel", 0.08)), 4)
+            prof_drift = round(float(profile_data.get("drift", 0.0)), 4)
+            prof_bull_bias = round(float(profile_data.get("bull_bias", 0.05)), 4)
+
+            if (
+                asset_volatility == prof_volatility
+                and asset_risk == prof_risk
+                and asset_momentum == prof_momentum
+                and asset_reversal_accel == prof_reversal_accel
+                and asset_drift == prof_drift
+                and asset_bull_bias == prof_bull_bias
+            ):
+                return profile_name
+
+        return "custom"
+
     async def _update_guild_prices(self, guild_id: int):
         await self._ensure_guild_initialized(guild_id)
         guild_conf = self.config.guild_from_id(guild_id)
@@ -998,6 +1031,8 @@ class MarketTrade(commands.Cog):
         trend = int(asset.get("trend", 0))
         trend_streak = max(0, int(asset.get("trend_streak", 0)))
         trend_text = "up" if trend > 0 else "down" if trend < 0 else "flat"
+        kind = str(asset.get("kind", "stock")).strip().lower()
+        profile = self._detect_asset_profile(kind, asset)
 
         await ctx.send(
             f"`{normalized_symbol}` ({asset.get('kind', 'unknown')}) {asset.get('name', 'Unknown')}:\n"
@@ -1005,7 +1040,8 @@ class MarketTrade(commands.Cog):
             f"min_price={humanize_number(min_price)} | max_price={humanize_number(max_price)}\n"
             f"volatility={volatility_percent}% | risk={risk}x | momentum={momentum_percent}%\n"
             f"reversal_accel={reversal_accel_percent}% | drift={drift_percent}% | bull_bias={bull_bias_percent}%\n"
-            f"trend={trend_text} | trend_streak={trend_streak}"
+            f"trend={trend_text} | trend_streak={trend_streak}\n"
+            f"profile={profile}"
         )
 
     @market_asset.command(name="setprofile")

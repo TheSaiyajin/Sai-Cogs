@@ -320,6 +320,81 @@ class MarketTrade(commands.Cog):
 
        return "custom"
 
+    async def _process_auto_orders_debug(self, guild_id: int):
+        """Debug version of _process_auto_orders that returns detailed info."""
+        debug_lines = []
+        try:
+            guild_conf = self.config.guild_from_id(guild_id)
+            assets = await guild_conf.assets()
+            
+            if not assets:
+                return ["No assets configured"]
+            
+            all_members = await self.config.all_members(guild_id)
+            if not all_members:
+                return ["No members found"]
+            
+            debug_lines.append(f"**Found {len(all_members)} members, {len(assets)} assets**")
+            debug_lines.append(f"Assets: {list(assets.keys())}\n")
+            
+            member_with_orders = 0
+            total_orders = 0
+            
+            for member_id, member_data in all_members.items():
+                auto_orders = member_data.get("auto_orders", {})
+                if not auto_orders:
+                    continue
+                
+                member_with_orders += 1
+                total_orders += len(auto_orders)
+                
+                debug_lines.append(f"**Member {member_id}:** {len(auto_orders)} orders")
+                
+                try:
+                    member_id_int = int(member_id)
+                    member = await self.bot.fetch_user(member_id_int)
+                    debug_lines.append(f"  ✓ User fetched: {member}")
+                except Exception as e:
+                    debug_lines.append(f"  ✗ Failed to fetch user: {e}")
+                    continue
+                
+                member_conf = self.config.member_from_ids(guild_id, member_id_int)
+                holdings = await member_conf.holdings()
+                
+                for order_id, order in list(auto_orders.items()):
+                    order_type = order.get("type")
+                    symbol = order.get("symbol", "").upper()
+                    target_price = float(order.get("target_price", 0))
+                    quantity = int(order.get("quantity", 0))
+                    
+                    debug_lines.append(f"  Order: {order_id}")
+                    debug_lines.append(f"    Type: {order_type}, Symbol: {symbol}, Target: {target_price}, Qty: {quantity}")
+                    
+                    if symbol not in assets:
+                        debug_lines.append(f"    ✗ Symbol not in assets")
+                        continue
+                    
+                    asset = assets[symbol]
+                    current_price = float(asset.get("price", 0))
+                    owned = int(holdings.get(symbol, 0))
+                    
+                    debug_lines.append(f"    Price: {current_price}, Owned: {owned}")
+                    
+                    if order_type == "sell":
+                        meets_price = current_price >= target_price
+                        qty_to_sell = owned if quantity == -1 else quantity
+                        has_holdings = owned >= qty_to_sell and qty_to_sell > 0
+                        debug_lines.append(f"    Sell check: price_ok={meets_price}, has_holdings={has_holdings}")
+                        if meets_price and has_holdings:
+                            debug_lines.append(f"    ✓ SHOULD EXECUTE THIS ORDER!")
+                
+            debug_lines.append(f"\n**Summary:** {member_with_orders} members with orders, {total_orders} total orders")
+            
+            return debug_lines
+            
+        except Exception as e:
+            return [f"Error: {e}\n```{traceback.format_exc()}```"]
+
     async def _process_auto_orders(self, guild_id: int):
         """Process all auto-buy and auto-sell orders for all members in the guild."""
         try:
@@ -1278,6 +1353,19 @@ class MarketTrade(commands.Cog):
         """Manually trigger auto-order processing for testing."""
         await ctx.send("🔄 Processing auto-orders now...")
         try:
+            # First show debug info
+            debug_output = await self._process_auto_orders_debug(ctx.guild.id)
+            debug_text = "\n".join(debug_output)
+            
+            # Split into chunks if too long
+            if len(debug_text) > 1900:
+                chunks = [debug_text[i:i+1900] for i in range(0, len(debug_text), 1900)]
+                for chunk in chunks:
+                    await ctx.send(f"```\n{chunk}\n```")
+            else:
+                await ctx.send(f"```\n{debug_text}\n```")
+            
+            # Now actually process
             await self._process_auto_orders(ctx.guild.id)
             await ctx.send("✅ Auto-orders processed! Check your DMs for execution notices.")
         except Exception as e:

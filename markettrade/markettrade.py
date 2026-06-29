@@ -1182,6 +1182,33 @@ class MarketTrade(commands.Cog):
             f"Ready for update: {time_since >= interval_minutes * 60}"
         )
 
+    @market.command(name="ordersdebug")
+    async def market_ordersdebug(self, ctx):
+        """Show your auto-orders for debugging."""
+        member_conf = self.config.member(ctx.author)
+        auto_orders = await member_conf.auto_orders()
+        holdings = await member_conf.holdings()
+        
+        if not auto_orders:
+            await ctx.send("You have no auto-orders.")
+            return
+        
+        lines = [f"**Your Auto-Orders ({len(auto_orders)} total):**"]
+        for order_id, order in auto_orders.items():
+            order_type = order.get("type", "?")
+            symbol = order.get("symbol", "?")
+            target = order.get("target_price", 0)
+            qty = order.get("quantity", 0)
+            held = holdings.get(symbol, 0)
+            lines.append(f"\n**{order_id}**\n"
+                        f"Type: {order_type}\n"
+                        f"Symbol: {symbol} (holding: {held})\n"
+                        f"Target price: {target}\n"
+                        f"Quantity: {qty} (note: -1 means 'all')\n"
+                        f"Full order data: {order}")
+        
+        await ctx.send("\n".join(lines))
+
     @market.command(name="liveprices")
     @commands.admin_or_permissions(manage_guild=True)
     async def market_liveprices(self, ctx):

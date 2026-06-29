@@ -401,6 +401,7 @@ class MarketTrade(commands.Cog):
 
     async def _process_auto_orders(self, guild_id: int):
         """Process all auto-buy and auto-sell orders for all members in the guild."""
+        execution_log = []
         try:
             guild = self.bot.get_guild(guild_id)
             if guild is None:
@@ -467,6 +468,7 @@ class MarketTrade(commands.Cog):
                                     total_cost_basis = (current_amount * current_avg_price) + (quantity * current_price)
                                     cb[symbol] = round(total_cost_basis / new_amount, 4)
                             del auto_orders[order_id]
+                            execution_log.append(f"BUY: {quantity} {symbol} @ {current_price}")
                             print(f"[Auto-Orders] BUY EXECUTED: {quantity} {symbol}")
                             try:
                                 await member.send(
@@ -500,6 +502,7 @@ class MarketTrade(commands.Cog):
                                         total_gain = 1
                                     await bank.deposit_credits(member, total_gain)
                                 del auto_orders[order_id]
+                                execution_log.append(f"SELL: {quantity_to_sell} {symbol} @ {current_price}")
                                 print(f"[Auto-Orders] SELL EXECUTED: {quantity_to_sell} {symbol} at {current_price}")
                                 try:
                                     profit_loss = realized_change
@@ -520,6 +523,8 @@ class MarketTrade(commands.Cog):
             print(f"Error in _process_auto_orders: {e}")
             import traceback
             traceback.print_exc()
+        
+        return execution_log
 
     async def _update_guild_prices(self, guild_id: int):
         await self._ensure_guild_initialized(guild_id)
@@ -1370,8 +1375,14 @@ class MarketTrade(commands.Cog):
                 await ctx.send(f"```\n{debug_text}\n```")
             
             # Now actually process
-            await self._process_auto_orders(ctx.guild.id)
-            await ctx.send("✅ Auto-orders processed! Check your DMs for execution notices.")
+            execution_log = await self._process_auto_orders(ctx.guild.id)
+            
+            # Show what was executed
+            if execution_log:
+                log_text = "\n".join(execution_log)
+                await ctx.send(f"✅ **Orders Executed:**\n```\n{log_text}\n```")
+            else:
+                await ctx.send("⚠️ No orders were executed (all conditions not met)")
         except Exception as e:
             await ctx.send(f"❌ Error: {e}\n```{traceback.format_exc()}```")
 

@@ -383,21 +383,22 @@ class MarketTrade(commands.Cog):
                elif order_type == "sell":
                    if current_price >= target_price:
                        owned_amount = int(holdings.get(symbol, 0))
-                       if owned_amount >= quantity:
+                       quantity_to_sell = owned_amount if quantity == -1 else quantity
+                       if owned_amount >= quantity_to_sell and quantity_to_sell > 0:
                            async with member_conf.holdings() as hld, member_conf.cost_basis() as cb, member_conf.realized_profit() as rp:
                                current_amount = int(hld.get(symbol, 0))
                                avg_buy_price = float(cb.get(symbol, current_price))
-                               realized_change = int(round((current_price - avg_buy_price) * quantity))
+                               realized_change = int(round((current_price - avg_buy_price) * quantity_to_sell))
                                previous_realized = int(rp.get(symbol, 0))
                                rp[symbol] = previous_realized + realized_change
 
-                               hld[symbol] = current_amount - quantity
+                               hld[symbol] = current_amount - quantity_to_sell
                                if hld[symbol] == 0:
                                    del hld[symbol]
                                    if symbol in cb:
                                        del cb[symbol]
 
-                               total_gain = int(round(current_price * quantity))
+                               total_gain = int(round(current_price * quantity_to_sell))
                                if total_gain <= 0:
                                    total_gain = 1
 
@@ -880,13 +881,14 @@ class MarketTrade(commands.Cog):
             await ctx.send_help()
 
     @market_autosell.command(name="set")
-    async def market_autosell_set(self, ctx, symbol: str, target_price: float, quantity: int):
-        """Set an auto-sell order. Sells when price rises to or above target."""
-        if quantity <= 0:
-            await ctx.send("Quantity must be at least 1.")
-            return
+    async def market_autosell_set(self, ctx, symbol: str, target_price: float, quantity: str = None):
+        """Set an auto-sell order. Sells when price rises to or above target. Use 'all' to sell everything."""
         if target_price <= 0:
             await ctx.send("Target price must be greater than 0.")
+            return
+
+        if quantity is None:
+            await ctx.send("Please provide a quantity or use `all`.")
             return
 
         normalized_symbol = self._normalize_symbol(symbol)
@@ -899,9 +901,23 @@ class MarketTrade(commands.Cog):
         member_conf = self.config.member(ctx.author)
         holdings = await member_conf.holdings()
         owned_amount = int(holdings.get(normalized_symbol, 0))
-        if owned_amount < quantity:
-            await ctx.send(f"You only own {owned_amount} `{normalized_symbol}` but trying to sell {quantity}.")
-            return
+
+        quantity_value = quantity.strip().lower()
+        quantity_int = 0
+        if quantity_value == "all":
+            quantity_int = -1
+        else:
+            try:
+                quantity_int = int(quantity_value)
+            except ValueError:
+                await ctx.send("Quantity must be a number or `all`.")
+                return
+            if quantity_int <= 0:
+                await ctx.send("Quantity must be at least 1.")
+                return
+            if owned_amount < quantity_int:
+                await ctx.send(f"You only own {owned_amount} `{normalized_symbol}` but trying to sell {quantity_int}.")
+                return
 
         order_id = f"{normalized_symbol}_{ctx.author.id}_{int(time.time() * 1000) % 10000}"
         async with member_conf.auto_orders() as orders:
@@ -909,12 +925,17 @@ class MarketTrade(commands.Cog):
                 "type": "sell",
                 "symbol": normalized_symbol,
                 "target_price": round(target_price, 2),
-                "quantity": quantity,
+                "quantity": quantity_int,
             }
 
-        await ctx.send(
-            f"Auto-sell order set: Sell {quantity} `{normalized_symbol}` when price rises to {humanize_number(round(target_price, 2))} credits."
-        )
+        if quantity_int == -1:
+            await ctx.send(
+                f"Auto-sell order set: Sell all `{normalized_symbol}` when price rises to {humanize_number(round(target_price, 2))} credits."
+            )
+        else:
+            await ctx.send(
+                f"Auto-sell order set: Sell {quantity_int} `{normalized_symbol}` when price rises to {humanize_number(round(target_price, 2))} credits."
+            )
 
     @market_autosell.command(name="list")
     async def market_autosell_list(self, ctx):
@@ -932,7 +953,10 @@ class MarketTrade(commands.Cog):
             symbol = order.get("symbol", "?")
             target_price = float(order.get("target_price", 0))
             quantity = int(order.get("quantity", 0))
-            lines.append(f"- `{symbol}`: {quantity} units @ {humanize_number(round(target_price, 2))} credits")
+            if quantity == -1:
+                lines.append(f"- `{symbol}`: all units @ {humanize_number(round(target_price, 2))} credits")
+            else:
+                lines.append(f"- `{symbol}`: {quantity} units @ {humanize_number(round(target_price, 2))} credits")
 
         await ctx.send("Your auto-sell orders:\n" + "\n".join(lines))
 

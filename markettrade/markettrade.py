@@ -553,20 +553,20 @@ class MarketTrade(commands.Cog):
         now = time.time()
 
         for guild_id, data in all_guilds.items():
-           try:
-               interval_minutes = int(data.get("update_interval_minutes", 10))
-               last_update_ts = float(data.get("last_update_ts", 0.0))
-               time_since_update = now - last_update_ts
+            try:
+                interval_minutes = int(data.get("update_interval_minutes", 10))
+                last_update_ts = float(data.get("last_update_ts", 0.0))
+                time_since_update = now - last_update_ts
                 
-               if time_since_update >= interval_minutes * 60:
-                   parsed_guild_id = int(guild_id)
-                   await self._process_auto_orders(parsed_guild_id)
-                   await self._update_guild_prices(parsed_guild_id)
-                   await self._update_live_prices_message(parsed_guild_id)
-           except Exception as e:
-               print(f"Error in price_updater for guild {guild_id}: {e}")
-               import traceback
-               traceback.print_exc()
+                if time_since_update >= interval_minutes * 60:
+                    parsed_guild_id = int(guild_id)
+                    await self._process_auto_orders(parsed_guild_id)
+                    await self._update_guild_prices(parsed_guild_id)
+                    await self._update_live_prices_message(parsed_guild_id)
+            except Exception as e:
+                print(f"Error in price_updater for guild {guild_id}: {e}")
+                import traceback
+                traceback.print_exc()
 
     @price_updater.before_loop
     async def before_price_updater(self):
@@ -1726,3 +1726,4 @@ class MarketTrade(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(MarketTrade(bot))
+

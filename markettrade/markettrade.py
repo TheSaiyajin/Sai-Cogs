@@ -335,10 +335,14 @@ class MarketTrade(commands.Cog):
            if guild is None:
                return
 
+           print(f"[Auto-Orders] Processing {len(all_members)} members, {len(assets)} assets: {list(assets.keys())}")
+
            for member_id, member_data in all_members.items():
                auto_orders = member_data.get("auto_orders", {})
                if not auto_orders:
                    continue
+
+               print(f"[Auto-Orders] Member {member_id} has {len(auto_orders)} orders")
 
                try:
                    member_id_int = int(member_id)
@@ -355,11 +359,16 @@ class MarketTrade(commands.Cog):
                    target_price = float(order.get("target_price", 0))
                    quantity = int(order.get("quantity", 0))
 
+                   print(f"[Auto-Orders] Order {order_id}: type={order_type}, symbol={symbol}, target={target_price}, qty={quantity}")
+
                    if symbol not in assets or target_price <= 0 or (quantity <= 0 and quantity != -1):
+                       print(f"[Auto-Orders] Skipped: symbol_in_assets={symbol in assets}, target_valid={target_price > 0}, qty_valid={quantity > 0 or quantity == -1}")
                        continue
 
                    asset = assets[symbol]
                    current_price = float(asset.get("price", 0))
+
+                   print(f"[Auto-Orders] {symbol}: current={current_price}, target={target_price}, type={order_type}")
 
                    if order_type == "buy":
                        if current_price <= target_price:
@@ -378,6 +387,7 @@ class MarketTrade(commands.Cog):
                                    total_cost_basis = (current_amount * current_avg_price) + (quantity * current_price)
                                    cb[symbol] = round(total_cost_basis / new_amount, 4)
                            del auto_orders[order_id]
+                           print(f"[Auto-Orders] BUY EXECUTED: {quantity} {symbol}")
                            try:
                                await member.send(
                                    f"✅ **Auto-Buy Order Executed!**\n"
@@ -392,6 +402,7 @@ class MarketTrade(commands.Cog):
                            current_holdings = await member_conf.holdings()
                            owned_amount = int(current_holdings.get(symbol, 0))
                            quantity_to_sell = owned_amount if quantity == -1 else quantity
+                           print(f"[Auto-Orders] SELL CHECK: owned={owned_amount}, to_sell={quantity_to_sell}, price_condition={current_price >= target_price}")
                            if owned_amount >= quantity_to_sell and quantity_to_sell > 0:
                                async with member_conf.holdings() as hld, member_conf.cost_basis() as cb, member_conf.realized_profit() as rp:
                                    current_amount = int(hld.get(symbol, 0))
@@ -409,6 +420,7 @@ class MarketTrade(commands.Cog):
                                        total_gain = 1
                                    await bank.deposit_credits(member, total_gain)
                                del auto_orders[order_id]
+                               print(f"[Auto-Orders] SELL EXECUTED: {quantity_to_sell} {symbol} at {current_price}")
                                try:
                                    profit_loss = realized_change
                                    profit_loss_text = f"+{humanize_number(profit_loss)}" if profit_loss > 0 else f"{humanize_number(profit_loss)}"
@@ -421,7 +433,7 @@ class MarketTrade(commands.Cog):
                                except (discord.Forbidden, discord.HTTPException):
                                    pass
                            else:
-                               print(f"Sell order not executed: {symbol} owned={owned_amount}, need to sell={quantity_to_sell}")
+                               print(f"[Auto-Orders] SELL FAILED: {symbol} owned={owned_amount}, need={quantity_to_sell}")
 
                await member_conf.auto_orders.set(auto_orders)
         except Exception as e:

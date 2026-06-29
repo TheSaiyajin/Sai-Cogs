@@ -1384,6 +1384,8 @@ class MarketTrade(commands.Cog):
         trend = int(asset.get("trend", 0))
         trend_streak = max(0, int(asset.get("trend_streak", 0)))
         trend_text = "up" if trend > 0 else "down" if trend < 0 else "flat"
+        kind = str(asset.get("kind", "stock")).strip().lower()
+        profile = self._detect_asset_profile(kind, asset)
 
         await ctx.send(
             f"`{normalized_symbol}` ({asset.get('kind', 'unknown')}) {asset.get('name', 'Unknown')}:\n"
@@ -1391,7 +1393,7 @@ class MarketTrade(commands.Cog):
             f"min_price={humanize_number(min_price)} | max_price={humanize_number(max_price)}\n"
             f"volatility={volatility_percent}% | risk={risk}x | momentum={momentum_percent}%\n"
             f"reversal_accel={reversal_accel_percent}% | drift={drift_percent}% | bull_bias={bull_bias_percent}%\n"
-            f"trend={trend_text} | trend_streak={trend_streak}"
+            f"trend={trend_text} | trend_streak={trend_streak} | profile={profile}"
         )
 
     @market_asset.command(name="setprofile")

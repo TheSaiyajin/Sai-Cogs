@@ -538,6 +538,89 @@ class MarketTrade(commands.Cog):
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
+    @market.command(name="help")
+    async def market_help(self, ctx):
+       """Show all market trading commands."""
+       embed = discord.Embed(
+           title="Market Trading Commands",
+           description="Complete list of all market trading commands",
+           color=discord.Color.green()
+       )
+
+       # Trading Commands
+       embed.add_field(
+           name="**Trading**",
+           value="`buy <symbol> <qty>` - Buy an asset with credits\n"
+                 "`sell <symbol> <qty|all>` - Sell asset or everything\n"
+                 "`portfolio [member]` - View holdings and value\n"
+                 "`prices` - Show current asset prices\n"
+                 "`graph <symbol> [points]` - Show price history graph",
+           inline=False
+       )
+
+       # Auto-Orders
+       embed.add_field(
+           name="**Auto-Buy Orders**",
+           value="`autobuy set <symbol> <price> <qty>` - Buy when price drops\n"
+                 "`autobuy list` - List your auto-buy orders\n"
+                 "`autobuy remove <symbol>` - Remove auto-buy orders",
+           inline=False
+       )
+
+       embed.add_field(
+           name="**Auto-Sell Orders**",
+           value="`autosell set <symbol> <price> <qty|all>` - Sell when price rises\n"
+                 "`autosell list` - List your auto-sell orders\n"
+                 "`autosell remove <symbol>` - Remove auto-sell orders",
+           inline=False
+       )
+
+       # Asset Management (Admin)
+       embed.add_field(
+           name="**Asset Management** (Admin)",
+           value="`asset add <symbol> <kind> <price> <name>` - Add tradable asset\n"
+                 "`asset list` - List all assets\n"
+                 "`asset info <symbol>` - Show asset details & profile\n"
+                 "`asset setprice <symbol> <price>` - Set asset price\n"
+                 "`asset setminprice <symbol> <price>` - Set minimum price\n"
+                 "`asset setmaxprice <symbol> <price>` - Set maximum price",
+           inline=False
+       )
+
+       # Behavior Profiles (Admin)
+       embed.add_field(
+           name="**Behavior Profiles** (Admin)",
+           value="`asset setprofile <symbol> <profile>` - Set behavior profile\n"
+                 "`asset profiles` - List available profiles\n"
+                 "Profiles: `stable`, `wild`, `uptrend`, `downtrend`, `swing`",
+           inline=False
+       )
+
+       # Price Control (Admin)
+       embed.add_field(
+           name="**Price Control** (Admin)",
+           value="`setdrift <value>` - Set baseline price change (-0.2 to 0.2)\n"
+                 "`setbullbias <value>` - Set uptrend preference (-0.4 to 0.4)\n"
+                 "`interval <minutes>` - Set price update interval (1-1440)\n"
+                 "`update` - Manually trigger price update",
+           inline=False
+       )
+
+       # Market Events (Admin)
+       embed.add_field(
+           name="**Market Events** (Admin)",
+           value="`event list` - List active events\n"
+                 "`event start <symbol> <percent> <ticks>` - Start event\n"
+                 "`event clear [symbol]` - Clear event(s)\n"
+                 "`event random <enabled>` - Enable/disable random events\n"
+                 "`event chance <percent>` - Set random event chance\n"
+                 "`event channel` - Set announcement channel",
+           inline=False
+       )
+
+       embed.set_footer(text="Use !!market <command> help for more info on any command")
+       await ctx.send(embed=embed)
+
     @market.command(name="prices")
     async def market_prices(self, ctx):
         """Show current asset prices."""

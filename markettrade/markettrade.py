@@ -427,8 +427,12 @@ class MarketTrade(commands.Cog):
 
                 try:
                     member_id_int = int(member_id)
-                    member = await self.bot.fetch_user(member_id_int)
-                except (discord.NotFound, ValueError, TypeError):
+                    # Get the Member object from the guild for bank operations
+                    member = guild.get_member(member_id_int)
+                    if member is None:
+                        print(f"[Auto-Orders] Member {member_id_int} not in guild, skipping")
+                        continue
+                except (ValueError, TypeError):
                     continue
 
                 member_conf = self.config.member_from_ids(guild_id, member_id_int)

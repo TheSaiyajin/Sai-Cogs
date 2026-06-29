@@ -345,9 +345,9 @@ class MarketTrade(commands.Cog):
            member_conf = self.config.member_from_ids(guild_id, int(member_id))
            holdings = await member_conf.holdings()
 
-            for order_id, order in list(auto_orders.items()):
-                order_type = order.get("type")
-                symbol = order.get("symbol", "").upper()
+           for order_id, order in list(auto_orders.items()):
+               order_type = order.get("type")
+               symbol = order.get("symbol", "").upper()
                 target_price = float(order.get("target_price", 0))
                 quantity = int(order.get("quantity", 0))
 

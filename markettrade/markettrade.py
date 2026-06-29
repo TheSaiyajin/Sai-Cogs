@@ -284,7 +284,7 @@ class MarketTrade(commands.Cog):
                 "bull_bias": 0.0,
             },
         }
-       return profiles.get(profile)
+        return profiles.get(profile)
 
     def _detect_asset_profile(self, kind: str, asset: dict) -> str:
        """Detect which profile an asset matches, or return 'custom' if none match."""
@@ -350,7 +350,7 @@ class MarketTrade(commands.Cog):
                target_price = float(order.get("target_price", 0))
                quantity = int(order.get("quantity", 0))
 
-               if symbol not in assets or target_price <= 0 or quantity <= 0:
+               if symbol not in assets or target_price <= 0 or (quantity <= 0 and quantity != -1):
                    continue
 
                asset = assets[symbol]
@@ -1301,11 +1301,6 @@ class MarketTrade(commands.Cog):
         trend = int(asset.get("trend", 0))
         trend_streak = max(0, int(asset.get("trend_streak", 0)))
         trend_text = "up" if trend > 0 else "down" if trend < 0 else "flat"
-<<<<<<< HEAD
-        kind = str(asset.get("kind", "stock")).strip().lower()
-        profile = self._detect_asset_profile(kind, asset)
-=======
->>>>>>> 0f139983533e5c5c1a966c3fd37721db2c3ae318
 
         await ctx.send(
             f"`{normalized_symbol}` ({asset.get('kind', 'unknown')}) {asset.get('name', 'Unknown')}:\n"
@@ -1313,12 +1308,7 @@ class MarketTrade(commands.Cog):
             f"min_price={humanize_number(min_price)} | max_price={humanize_number(max_price)}\n"
             f"volatility={volatility_percent}% | risk={risk}x | momentum={momentum_percent}%\n"
             f"reversal_accel={reversal_accel_percent}% | drift={drift_percent}% | bull_bias={bull_bias_percent}%\n"
-<<<<<<< HEAD
-            f"trend={trend_text} | trend_streak={trend_streak}\n"
-            f"profile={profile}"
-=======
             f"trend={trend_text} | trend_streak={trend_streak}"
->>>>>>> 0f139983533e5c5c1a966c3fd37721db2c3ae318
         )
 
     @market_asset.command(name="setprofile")

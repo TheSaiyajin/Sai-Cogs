@@ -322,124 +322,124 @@ class MarketTrade(commands.Cog):
     async def _process_auto_orders(self, guild_id: int):
         """Process all auto-buy and auto-sell orders for all members in the guild."""
         try:
-           guild_conf = self.config.guild_from_id(guild_id)
-           assets = await guild_conf.assets()
-           if not assets:
-               return
+            guild_conf = self.config.guild_from_id(guild_id)
+            assets = await guild_conf.assets()
+            if not assets:
+                return
 
-           all_members = await self.config.all_members(guild_id)
-           if not all_members:
-               return
+            all_members = await self.config.all_members(guild_id)
+            if not all_members:
+                return
 
-           guild = self.bot.get_guild(guild_id)
-           if guild is None:
-               return
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                return
 
-           print(f"[Auto-Orders] Processing {len(all_members)} members, {len(assets)} assets: {list(assets.keys())}")
+            print(f"[Auto-Orders] Processing {len(all_members)} members, {len(assets)} assets: {list(assets.keys())}")
 
-           for member_id, member_data in all_members.items():
-               auto_orders = member_data.get("auto_orders", {})
-               if not auto_orders:
-                   continue
+            for member_id, member_data in all_members.items():
+                auto_orders = member_data.get("auto_orders", {})
+                if not auto_orders:
+                    continue
 
-               print(f"[Auto-Orders] Member {member_id} has {len(auto_orders)} orders")
+                print(f"[Auto-Orders] Member {member_id} has {len(auto_orders)} orders")
 
-               try:
-                   member_id_int = int(member_id)
-                   member = await self.bot.fetch_user(member_id_int)
-               except (discord.NotFound, ValueError, TypeError):
-                   continue
+                try:
+                    member_id_int = int(member_id)
+                    member = await self.bot.fetch_user(member_id_int)
+                except (discord.NotFound, ValueError, TypeError):
+                    continue
 
-               member_conf = self.config.member_from_ids(guild_id, member_id_int)
-               holdings = await member_conf.holdings()
+                member_conf = self.config.member_from_ids(guild_id, member_id_int)
+                holdings = await member_conf.holdings()
 
-               for order_id, order in list(auto_orders.items()):
-                   order_type = order.get("type")
-                   symbol = order.get("symbol", "").upper()
-                   target_price = float(order.get("target_price", 0))
-                   quantity = int(order.get("quantity", 0))
+                for order_id, order in list(auto_orders.items()):
+                    order_type = order.get("type")
+                    symbol = order.get("symbol", "").upper()
+                    target_price = float(order.get("target_price", 0))
+                    quantity = int(order.get("quantity", 0))
 
-                   print(f"[Auto-Orders] Order {order_id}: type={order_type}, symbol={symbol}, target={target_price}, qty={quantity}")
+                    print(f"[Auto-Orders] Order {order_id}: type={order_type}, symbol={symbol}, target={target_price}, qty={quantity}")
 
-                   if symbol not in assets or target_price <= 0 or (quantity <= 0 and quantity != -1):
-                       print(f"[Auto-Orders] Skipped: symbol_in_assets={symbol in assets}, target_valid={target_price > 0}, qty_valid={quantity > 0 or quantity == -1}")
-                       continue
+                    if symbol not in assets or target_price <= 0 or (quantity <= 0 and quantity != -1):
+                        print(f"[Auto-Orders] Skipped: symbol_in_assets={symbol in assets}, target_valid={target_price > 0}, qty_valid={quantity > 0 or quantity == -1}")
+                        continue
 
-                   asset = assets[symbol]
-                   current_price = float(asset.get("price", 0))
+                    asset = assets[symbol]
+                    current_price = float(asset.get("price", 0))
 
-                   print(f"[Auto-Orders] {symbol}: current={current_price}, target={target_price}, type={order_type}")
+                    print(f"[Auto-Orders] {symbol}: current={current_price}, target={target_price}, type={order_type}")
 
-                   if order_type == "buy":
-                       if current_price <= target_price:
-                           total_cost = int(round(current_price * quantity))
-                           if total_cost <= 0:
-                               total_cost = 1
-                           if not await bank.can_spend(member, total_cost):
-                               continue
-                           await bank.withdraw_credits(member, total_cost)
-                           async with member_conf.holdings() as hld, member_conf.cost_basis() as cb:
-                               current_amount = int(hld.get(symbol, 0))
-                               current_avg_price = float(cb.get(symbol, current_price))
-                               new_amount = current_amount + quantity
-                               hld[symbol] = new_amount
-                               if new_amount > 0:
-                                   total_cost_basis = (current_amount * current_avg_price) + (quantity * current_price)
-                                   cb[symbol] = round(total_cost_basis / new_amount, 4)
-                           del auto_orders[order_id]
-                           print(f"[Auto-Orders] BUY EXECUTED: {quantity} {symbol}")
-                           try:
-                               await member.send(
-                                   f"✅ **Auto-Buy Order Executed!**\n"
-                                   f"Bought {quantity} `{symbol}` at {humanize_number(round(current_price, 2))} credits each\n"
-                                   f"Total cost: {humanize_number(total_cost)} credits"
-                               )
-                           except (discord.Forbidden, discord.HTTPException):
-                               pass
+                    if order_type == "buy":
+                        if current_price <= target_price:
+                            total_cost = int(round(current_price * quantity))
+                            if total_cost <= 0:
+                                total_cost = 1
+                            if not await bank.can_spend(member, total_cost):
+                                continue
+                            await bank.withdraw_credits(member, total_cost)
+                            async with member_conf.holdings() as hld, member_conf.cost_basis() as cb:
+                                current_amount = int(hld.get(symbol, 0))
+                                current_avg_price = float(cb.get(symbol, current_price))
+                                new_amount = current_amount + quantity
+                                hld[symbol] = new_amount
+                                if new_amount > 0:
+                                    total_cost_basis = (current_amount * current_avg_price) + (quantity * current_price)
+                                    cb[symbol] = round(total_cost_basis / new_amount, 4)
+                            del auto_orders[order_id]
+                            print(f"[Auto-Orders] BUY EXECUTED: {quantity} {symbol}")
+                            try:
+                                await member.send(
+                                    f"✅ **Auto-Buy Order Executed!**\n"
+                                    f"Bought {quantity} `{symbol}` at {humanize_number(round(current_price, 2))} credits each\n"
+                                    f"Total cost: {humanize_number(total_cost)} credits"
+                                )
+                            except (discord.Forbidden, discord.HTTPException):
+                                pass
 
-                   elif order_type == "sell":
-                       if current_price >= target_price:
-                           current_holdings = await member_conf.holdings()
-                           owned_amount = int(current_holdings.get(symbol, 0))
-                           quantity_to_sell = owned_amount if quantity == -1 else quantity
-                           print(f"[Auto-Orders] SELL CHECK: owned={owned_amount}, to_sell={quantity_to_sell}, price_condition={current_price >= target_price}")
-                           if owned_amount >= quantity_to_sell and quantity_to_sell > 0:
-                               async with member_conf.holdings() as hld, member_conf.cost_basis() as cb, member_conf.realized_profit() as rp:
-                                   current_amount = int(hld.get(symbol, 0))
-                                   avg_buy_price = float(cb.get(symbol, current_price))
-                                   realized_change = int(round((current_price - avg_buy_price) * quantity_to_sell))
-                                   previous_realized = int(rp.get(symbol, 0))
-                                   rp[symbol] = previous_realized + realized_change
-                                   hld[symbol] = current_amount - quantity_to_sell
-                                   if hld[symbol] == 0:
-                                       del hld[symbol]
-                                       if symbol in cb:
-                                           del cb[symbol]
-                                   total_gain = int(round(current_price * quantity_to_sell))
-                                   if total_gain <= 0:
-                                       total_gain = 1
-                                   await bank.deposit_credits(member, total_gain)
-                               del auto_orders[order_id]
-                               print(f"[Auto-Orders] SELL EXECUTED: {quantity_to_sell} {symbol} at {current_price}")
-                               try:
-                                   profit_loss = realized_change
-                                   profit_loss_text = f"+{humanize_number(profit_loss)}" if profit_loss > 0 else f"{humanize_number(profit_loss)}"
-                                   await member.send(
-                                       f"✅ **Auto-Sell Order Executed!**\n"
-                                       f"Sold {quantity_to_sell} `{symbol}` at {humanize_number(round(current_price, 2))} credits each\n"
-                                       f"Total gain: {humanize_number(total_gain)} credits\n"
-                                       f"Profit/Loss: {profit_loss_text} credits"
-                                   )
-                               except (discord.Forbidden, discord.HTTPException):
-                                   pass
-                           else:
-                               print(f"[Auto-Orders] SELL FAILED: {symbol} owned={owned_amount}, need={quantity_to_sell}")
+                    elif order_type == "sell":
+                        if current_price >= target_price:
+                            current_holdings = await member_conf.holdings()
+                            owned_amount = int(current_holdings.get(symbol, 0))
+                            quantity_to_sell = owned_amount if quantity == -1 else quantity
+                            print(f"[Auto-Orders] SELL CHECK: owned={owned_amount}, to_sell={quantity_to_sell}, price_condition={current_price >= target_price}")
+                            if owned_amount >= quantity_to_sell and quantity_to_sell > 0:
+                                async with member_conf.holdings() as hld, member_conf.cost_basis() as cb, member_conf.realized_profit() as rp:
+                                    current_amount = int(hld.get(symbol, 0))
+                                    avg_buy_price = float(cb.get(symbol, current_price))
+                                    realized_change = int(round((current_price - avg_buy_price) * quantity_to_sell))
+                                    previous_realized = int(rp.get(symbol, 0))
+                                    rp[symbol] = previous_realized + realized_change
+                                    hld[symbol] = current_amount - quantity_to_sell
+                                    if hld[symbol] == 0:
+                                        del hld[symbol]
+                                        if symbol in cb:
+                                            del cb[symbol]
+                                    total_gain = int(round(current_price * quantity_to_sell))
+                                    if total_gain <= 0:
+                                        total_gain = 1
+                                    await bank.deposit_credits(member, total_gain)
+                                del auto_orders[order_id]
+                                print(f"[Auto-Orders] SELL EXECUTED: {quantity_to_sell} {symbol} at {current_price}")
+                                try:
+                                    profit_loss = realized_change
+                                    profit_loss_text = f"+{humanize_number(profit_loss)}" if profit_loss > 0 else f"{humanize_number(profit_loss)}"
+                                    await member.send(
+                                        f"✅ **Auto-Sell Order Executed!**\n"
+                                        f"Sold {quantity_to_sell} `{symbol}` at {humanize_number(round(current_price, 2))} credits each\n"
+                                        f"Total gain: {humanize_number(total_gain)} credits\n"
+                                        f"Profit/Loss: {profit_loss_text} credits"
+                                    )
+                                except (discord.Forbidden, discord.HTTPException):
+                                    pass
+                            else:
+                                print(f"[Auto-Orders] SELL FAILED: {symbol} owned={owned_amount}, need={quantity_to_sell}")
 
-               await member_conf.auto_orders.set(auto_orders)
+                await member_conf.auto_orders.set(auto_orders)
         except Exception as e:
-           print(f"Error in _process_auto_orders: {e}")
-           import traceback
-           traceback.print_exc()
+            print(f"Error in _process_auto_orders: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def _update_guild_prices(self, guild_id: int):
         await self._ensure_guild_initialized(guild_id)
@@ -1206,6 +1206,68 @@ class MarketTrade(commands.Cog):
                         f"Target price: {target}\n"
                         f"Quantity: {qty} (note: -1 means 'all')\n"
                         f"Full order data: {order}")
+        
+        await ctx.send("\n".join(lines))
+
+    @market.command(name="testorder")
+    async def market_testorder(self, ctx, symbol: str):
+        """Test if an auto-order would execute (simulates the check)."""
+        guild = ctx.guild
+        assets = await self._get_assets(guild)
+        
+        if symbol.upper() not in assets:
+            await ctx.send(f"Asset `{symbol}` not found.")
+            return
+        
+        asset = assets[symbol.upper()]
+        current_price = float(asset.get("price", 0))
+        
+        member_conf = self.config.member(ctx.author)
+        auto_orders = await member_conf.auto_orders()
+        holdings = await member_conf.holdings()
+        
+        orders_for_symbol = [o for o in auto_orders.values() if o.get("symbol") == symbol.upper()]
+        
+        if not orders_for_symbol:
+            await ctx.send(f"No auto-orders found for `{symbol}`.")
+            return
+        
+        lines = [f"**Testing Auto-Orders for `{symbol}` (current price: {current_price})**\n"]
+        
+        for order in orders_for_symbol:
+            order_type = order.get("type")
+            target_price = float(order.get("target_price", 0))
+            quantity = int(order.get("quantity", 0))
+            owned = int(holdings.get(symbol.upper(), 0))
+            
+            lines.append(f"\n**Type:** {order_type}")
+            lines.append(f"**Target:** {target_price}")
+            lines.append(f"**Current:** {current_price}")
+            
+            if order_type == "buy":
+                condition = current_price <= target_price
+                lines.append(f"**Condition (price <= target):** {condition}")
+                if condition:
+                    lines.append("✅ **WOULD EXECUTE** (if you have credits)")
+                else:
+                    lines.append(f"❌ **Would NOT execute** ({current_price} > {target_price})")
+                    
+            elif order_type == "sell":
+                condition = current_price >= target_price
+                qty_to_sell = owned if quantity == -1 else quantity
+                can_sell = owned >= qty_to_sell and qty_to_sell > 0
+                
+                lines.append(f"**Condition (price >= target):** {condition}")
+                lines.append(f"**Owned:** {owned} | **Need to sell:** {qty_to_sell}")
+                lines.append(f"**Can sell:** {can_sell}")
+                
+                if condition and can_sell:
+                    lines.append("✅ **WOULD EXECUTE**")
+                else:
+                    if not condition:
+                        lines.append(f"❌ **Would NOT execute** ({current_price} < {target_price})")
+                    if not can_sell:
+                        lines.append(f"❌ **Would NOT execute** (not enough holdings: {owned} < {qty_to_sell})")
         
         await ctx.send("\n".join(lines))
 

@@ -337,12 +337,13 @@ class MarketTrade(commands.Cog):
                 continue
 
             try:
-                member = await self.bot.fetch_user(member_id)
-            except discord.NotFound:
-                continue
+               member_id_int = int(member_id)
+               member = await self.bot.fetch_user(member_id_int)
+           except (discord.NotFound, ValueError):
+               continue
 
-            member_conf = self.config.member_from_ids(guild_id, member_id)
-            holdings = await member_conf.holdings()
+           member_conf = self.config.member_from_ids(guild_id, int(member_id))
+           holdings = await member_conf.holdings()
 
             for order_id, order in list(auto_orders.items()):
                 order_type = order.get("type")

@@ -324,19 +324,19 @@ class MarketTrade(commands.Cog):
         guild_conf = self.config.guild_from_id(guild_id)
         assets = await guild_conf.assets()
         if not assets:
-            return
+           return
 
         all_members = await self.config.all_members(guild_id)
         guild = self.bot.get_guild(guild_id)
         if guild is None:
-            return
+           return
 
         for member_id, member_data in all_members.items():
            auto_orders = member_data.get("auto_orders", {})
-            if not auto_orders:
-                continue
+           if not auto_orders:
+               continue
 
-            try:
+           try:
                member_id_int = int(member_id)
                member = await self.bot.fetch_user(member_id_int)
            except (discord.NotFound, ValueError):
@@ -362,22 +362,17 @@ class MarketTrade(commands.Cog):
                        total_cost = int(round(current_price * quantity))
                        if total_cost <= 0:
                            total_cost = 1
-
                        if not await bank.can_spend(member, total_cost):
                            continue
-
                        await bank.withdraw_credits(member, total_cost)
-
                        async with member_conf.holdings() as hld, member_conf.cost_basis() as cb:
                            current_amount = int(hld.get(symbol, 0))
                            current_avg_price = float(cb.get(symbol, current_price))
                            new_amount = current_amount + quantity
                            hld[symbol] = new_amount
-
                            if new_amount > 0:
                                total_cost_basis = (current_amount * current_avg_price) + (quantity * current_price)
                                cb[symbol] = round(total_cost_basis / new_amount, 4)
-
                        del auto_orders[order_id]
 
                elif order_type == "sell":
@@ -391,19 +386,15 @@ class MarketTrade(commands.Cog):
                                realized_change = int(round((current_price - avg_buy_price) * quantity_to_sell))
                                previous_realized = int(rp.get(symbol, 0))
                                rp[symbol] = previous_realized + realized_change
-
                                hld[symbol] = current_amount - quantity_to_sell
                                if hld[symbol] == 0:
                                    del hld[symbol]
                                    if symbol in cb:
                                        del cb[symbol]
-
                                total_gain = int(round(current_price * quantity_to_sell))
                                if total_gain <= 0:
                                    total_gain = 1
-
                                await bank.deposit_credits(member, total_gain)
-
                            del auto_orders[order_id]
 
            await member_conf.auto_orders.set(auto_orders)

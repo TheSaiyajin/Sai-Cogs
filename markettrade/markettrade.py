@@ -159,11 +159,11 @@ class MarketTrade(commands.Cog):
             return active_events, None
 
         selected_symbol = random.choice(available_symbols)
-        random_percent = round(random.uniform(3.0, 10.0), 2)
+        random_percent = round(random.uniform(1.0, 3.0), 2)
         signed_percent = random_percent if random.random() < 0.5 else random_percent * -1
         active_events[selected_symbol] = {
             "change_per_tick": round(signed_percent / 100.0, 4),
-            "remaining_ticks": random.randint(2, 10),
+            "remaining_ticks": random.randint(1, 4),
             "source": "random",
         }
         return active_events, (selected_symbol, dict(active_events[selected_symbol]))
@@ -242,45 +242,44 @@ class MarketTrade(commands.Cog):
         }
 
     def _behavior_profile(self, kind: str, profile: str):
-        defaults = self._default_asset_behavior(kind)
         profiles = {
             "stable": {
-                "volatility": 0.035 if kind == "stock" else 0.05,
-                "risk": 0.9 if kind == "stock" else 1.0,
-                "momentum": 0.55,
-                "reversal_accel": 0.1,
-                "drift": 0.0004 if kind == "stock" else 0.0007,
-                "bull_bias": 0.04,
+                "volatility": 0.006,
+                "risk": 0.9,
+                "momentum": 0.50,
+                "reversal_accel": 0.14,
+                "drift": 0.00003,
+                "bull_bias": 0.002,
             },
             "wild": {
-                "volatility": 0.085 if kind == "stock" else 0.12,
-                "risk": 1.3 if kind == "stock" else 1.55,
-                "momentum": 0.7,
-                "reversal_accel": 0.07,
-                "drift": 0.0008 if kind == "stock" else 0.0012,
-                "bull_bias": 0.06,
+                "volatility": 0.016,
+                "risk": 1.2,
+                "momentum": 0.54,
+                "reversal_accel": 0.12,
+                "drift": 0.00002,
+                "bull_bias": 0.002,
             },
             "uptrend": {
-                "volatility": defaults["volatility"],
-                "risk": defaults["risk"],
-                "momentum": min(0.9, defaults["momentum"] + 0.05),
-                "reversal_accel": defaults["reversal_accel"],
-                "drift": defaults["drift"] + 0.0008,
-                "bull_bias": min(0.3, defaults["bull_bias"] + 0.08),
+                "volatility": 0.008,
+                "risk": 1.0,
+                "momentum": 0.53,
+                "reversal_accel": 0.12,
+                "drift": 0.00008,
+                "bull_bias": 0.008,
             },
             "downtrend": {
-                "volatility": defaults["volatility"],
-                "risk": defaults["risk"],
-                "momentum": min(0.9, defaults["momentum"] + 0.02),
-                "reversal_accel": defaults["reversal_accel"],
-                "drift": defaults["drift"] - 0.0012,
-                "bull_bias": max(-0.3, defaults["bull_bias"] - 0.16),
+                "volatility": 0.008,
+                "risk": 1.0,
+                "momentum": 0.53,
+                "reversal_accel": 0.12,
+                "drift": -0.00008,
+                "bull_bias": -0.008,
             },
             "swing": {
-                "volatility": 0.06 if kind == "stock" else 0.095,
-                "risk": 1.2 if kind == "stock" else 1.35,
-                "momentum": 0.52,
-                "reversal_accel": 0.14,
+                "volatility": 0.012,
+                "risk": 1.1,
+                "momentum": 0.48,
+                "reversal_accel": 0.18,
                 "drift": 0.0,
                 "bull_bias": 0.0,
             },

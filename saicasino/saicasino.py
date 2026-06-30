@@ -1,8 +1,7 @@
 import random
 import discord
 from redbot.core import commands, bank
-from redbot.core.utils.chat_formatting import humanize_number, bold
-from discord.ext import commands as cmd_ext
+from redbot.core.utils.chat_formatting import humanize_number
 
 
 class Deck:
@@ -101,6 +100,8 @@ class BlackjackGameView(discord.ui.View):
         
         embed = self._create_game_embed()
         await interaction.response.edit_message(embed=embed, view=self if not self.game_over else None)
+        if self.game_over:
+            self.stop()
     
     @discord.ui.button(label="Stand", style=discord.ButtonStyle.success, emoji="🛑")
     async def stand_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -136,6 +137,7 @@ class BlackjackGameView(discord.ui.View):
         
         embed = self._create_game_embed()
         await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
     
     def _create_game_embed(self):
         """Create the embed for the current game state."""
@@ -189,6 +191,9 @@ class BlackjackGameView(discord.ui.View):
         elif status == 'dealer_bust':
             winnings = bet * 2
             return f"✅ **Dealer Bust!** You win {humanize_number(winnings)} credits!"
+        elif status == 'player_blackjack':
+            winnings = int(bet * 2.5)
+            return f"✅ **Blackjack!** You win {humanize_number(winnings)} credits!"
         elif status == 'player_win':
             winnings = bet * 2
             return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
@@ -260,24 +265,17 @@ class SaiCasino(commands.Cog):
         # Determine if there's a natural blackjack situation
         if player_blackjack and dealer_blackjack:
             game_data['status'] = 'push'
-            await bank.deposit_credits(ctx.author, bet)
-            status_msg = f"🤝 **Push!** Both have blackjack. Your {humanize_number(bet)} credits are returned."
         elif player_blackjack:
-            game_data['status'] = 'player_win'
-            winnings = int(bet * 1.5)  # Natural blackjack pays 3:2
-            await bank.deposit_credits(ctx.author, winnings)
-            status_msg = f"✅ **Blackjack!** You win {humanize_number(winnings)} credits!"
+            game_data['status'] = 'player_blackjack'
         elif dealer_blackjack:
             game_data['status'] = 'dealer_win'
-            status_msg = f"❌ **Dealer has Blackjack!** You lost {humanize_number(bet)} credits."
-        else:
-            status_msg = "Your turn - Hit or Stand?"
         
         # Create the game view and embed
         view = BlackjackGameView(game_data)
         
         # If game is already over (blackjack cases), disable buttons
         if game_data['status'] != 'playing':
+            view.game_over = True
             view.hit_button.disabled = True
             view.stand_button.disabled = True
             view_to_send = None
@@ -290,23 +288,22 @@ class SaiCasino(commands.Cog):
         
         # Wait for the game to finish
         if game_data['status'] == 'playing':
-            try:
-                await view.wait()
-            except Exception:
-                pass
+            await view.wait()
         
         # Handle final winnings/losses
         if game_data['status'] != 'playing':
             final_embed = view._create_game_embed()
             try:
                 await message.edit(embed=final_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
             
             # Process final payouts
             if game_data['status'] in ['dealer_bust', 'player_win']:
-                winnings = int(bet * 2) if game_data['status'] != 'player_win' else int(bet * 2)
-                # Money already withdrawn, now deposit winnings
+                winnings = int(bet * 2)
+                await bank.deposit_credits(ctx.author, winnings)
+            elif game_data['status'] == 'player_blackjack':
+                winnings = int(bet * 2.5)
                 await bank.deposit_credits(ctx.author, winnings)
             elif game_data['status'] == 'push':
                 await bank.deposit_credits(ctx.author, bet)

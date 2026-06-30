@@ -66,10 +66,17 @@ For vote role rewards:
 - `[p]voterole setrole <@role>` (admin)
 - `[p]voterole clearrole` (admin)
 - `[p]voterole duration <days>` (admin, example: `1` or `2`)
+- `[p]voterole deleteexpiredpollroles <true|false>` (admin)
 - `[p]voterole status` (admin)
 - `[p]voterole grant <@member>` (admin, manual test/refresh)
+- `[p]voterole poll set <message_id> <answer_id> <@role>` (admin)
+- `[p]voterole poll remove <message_id> <answer_id>` (admin)
+- `[p]voterole poll clear <message_id>` (admin)
+- `[p]voterole poll list [message_id]` (admin)
+- `[p]voterole poll finalize <message_id>` (admin, apply roles after poll ends)
 
 VoteRole listens for `on_dbl_vote` and `on_topgg_vote` events from vote webhook integrations.
+For Discord polls, votes are tracked and roles are granted when you run `poll finalize` after the poll ends.
 
 Prices now use trend momentum, so dips/pumps can continue across multiple updates before reversing.
 `[p]market prices` reuses and edits the last prices message in that channel for 5 minutes instead of sending a new one.

@@ -1,0 +1,1 @@
+from .voterole import setup

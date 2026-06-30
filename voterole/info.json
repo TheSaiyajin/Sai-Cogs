@@ -1,0 +1,13 @@
+{
+  "author": ["YourName"],
+  "install_msg": "Thanks for installing VoteRole. Configure it with [p]voterole setrole and [p]voterole duration.",
+  "name": "VoteRole",
+  "short": "Temporary vote reward role",
+  "description": "A Red Discord bot cog that grants a temporary role when vote webhook events are received.",
+  "tags": ["utility", "votes", "roles", "rewards"],
+  "requirements": [],
+  "min_bot_version": "3.5.0",
+  "hidden": false,
+  "disabled": false,
+  "end_user_data_statement": "This cog stores configured role IDs, vote role durations, and temporary role expiry timestamps per guild."
+}

@@ -3,6 +3,7 @@
 This repository contains Red Discord bot cogs:
 - `saireply`: replies when specific words appear in selected channels.
 - `markettrade`: fake crypto/stock trading game using Red bank credits.
+- `voterole`: grants a temporary role when a vote event is received (top.gg style events).
 
 ## Features
 - Add/remove channels in Discord with commands
@@ -20,6 +21,13 @@ Once this repo is pushed to GitHub, you can install it in Red with:
 
 - `[p]cog install <your-github-repo-url>`
 - `[p]load saireply`
+
+For vote role rewards:
+
+- `[p]cog install <your-github-repo-url> voterole`
+- `[p]load voterole`
+- `[p]voterole createrole Voter`
+- `[p]voterole duration 2`
 
 ## Commands
 - `[p]saireply channel add #channel`
@@ -52,6 +60,16 @@ Once this repo is pushed to GitHub, you can install it in Red with:
 - `[p]market asset setvolatility <symbol> <percent>` (admin)
 - `[p]market asset setrisk <symbol> <multiplier>` (admin)
 - `[p]market asset setmomentum <symbol> <percent>` (admin)
+
+## VoteRole Commands
+- `[p]voterole createrole [name]` (admin, creates and sets role)
+- `[p]voterole setrole <@role>` (admin)
+- `[p]voterole clearrole` (admin)
+- `[p]voterole duration <days>` (admin, example: `1` or `2`)
+- `[p]voterole status` (admin)
+- `[p]voterole grant <@member>` (admin, manual test/refresh)
+
+VoteRole listens for `on_dbl_vote` and `on_topgg_vote` events from vote webhook integrations.
 
 Prices now use trend momentum, so dips/pumps can continue across multiple updates before reversing.
 `[p]market prices` reuses and edits the last prices message in that channel for 5 minutes instead of sending a new one.

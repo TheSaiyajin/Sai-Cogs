@@ -73,10 +73,12 @@ For vote role rewards:
 - `[p]voterole poll remove <message_id> <answer_id>` (admin)
 - `[p]voterole poll clear <message_id>` (admin)
 - `[p]voterole poll list [message_id]` (admin)
-- `[p]voterole poll finalize <message_id>` (admin, apply roles after poll ends)
+- `[p]voterole poll finalize <message_id>` (admin, manual fallback finalize)
 
 VoteRole listens for `on_dbl_vote` and `on_topgg_vote` events from vote webhook integrations.
-For Discord polls, votes are tracked and roles are granted when you run `poll finalize` after the poll ends.
+For Discord polls, votes are tracked and roles are granted automatically after the poll ends.
+`poll finalize` is still available as a manual fallback.
+If a configured reward role was deleted, the cog will auto-create a replacement role and assign it.
 
 Prices now use trend momentum, so dips/pumps can continue across multiple updates before reversing.
 `[p]market prices` reuses and edits the last prices message in that channel for 5 minutes instead of sending a new one.

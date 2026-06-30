@@ -22,12 +22,15 @@ class VoteRole(commands.Cog):
             grants={},
             poll_roles={},
             poll_votes={},
+            poll_channels={},
             delete_expired_poll_roles=True,
         )
         self._expire_vote_roles.start()
+        self._auto_finalize_polls.start()
 
     def cog_unload(self):
         self._expire_vote_roles.cancel()
+        self._auto_finalize_polls.cancel()
 
     @staticmethod
     def _extract_vote_user_id(data: Any) -> Optional[int]:
@@ -55,6 +58,18 @@ class VoteRole(commands.Cog):
         if role_id is None:
             return None
         return guild.get_role(role_id)
+
+    async def _create_reward_role(
+        self, guild: discord.Guild, name: str, reason: str
+    ) -> Optional[discord.Role]:
+        try:
+            return await guild.create_role(name=name, reason=reason)
+        except discord.Forbidden:
+            LOG.warning("Missing permissions to create role '%s' in guild %s.", name, guild.id)
+            return None
+        except discord.HTTPException as exc:
+            LOG.warning("Failed to create role '%s' in guild %s: %s", name, guild.id, exc)
+            return None
 
     async def _grant_temporary_role(
         self, guild: discord.Guild, member: discord.Member, role: discord.Role
@@ -90,8 +105,105 @@ class VoteRole(commands.Cog):
     async def _grant_vote_role(self, guild: discord.Guild, member: discord.Member) -> bool:
         role = await self._get_vote_role(guild)
         if role is None:
-            return False
+            role = discord.utils.get(guild.roles, name="Voter")
+            if role is None:
+                role = await self._create_reward_role(
+                    guild, "Voter", "Auto-created missing vote reward role"
+                )
+            if role is None:
+                return False
+            await self.config.guild(guild).vote_role_id.set(role.id)
         return await self._grant_temporary_role(guild, member, role)
+
+    async def _is_poll_closed(self, guild: discord.Guild, message_id: int) -> bool:
+        poll_channels = await self.config.guild(guild).poll_channels()
+        channel_id = poll_channels.get(str(message_id))
+        if channel_id is None:
+            return False
+
+        channel = guild.get_channel(channel_id)
+        if channel is None and hasattr(guild, "get_channel_or_thread"):
+            channel = guild.get_channel_or_thread(channel_id)
+        if channel is None:
+            return False
+
+        try:
+            message = await channel.fetch_message(message_id)
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            return False
+
+        poll = getattr(message, "poll", None)
+        if poll is None:
+            return False
+
+        if getattr(poll, "is_finalized", False) or getattr(poll, "is_closed", False):
+            return True
+
+        expires_at = getattr(poll, "expires_at", None)
+        if expires_at is None:
+            return False
+
+        return expires_at <= discord.utils.utcnow()
+
+    async def _finalize_poll_roles(
+        self, guild: discord.Guild, message_id: int
+    ) -> tuple[int, int, str]:
+        message_key = str(message_id)
+        poll_roles = await self.config.guild(guild).poll_roles()
+        mappings = poll_roles.get(message_key)
+        if not mappings:
+            return 0, 0, "no_mappings"
+
+        poll_votes = await self.config.guild(guild).poll_votes()
+        votes = poll_votes.get(message_key)
+        if not votes:
+            return 0, 0, "no_votes"
+
+        applied = 0
+        skipped = 0
+        created_or_updated_mappings = {}
+        for user_key, answer_id in votes.items():
+            role_id = mappings.get(str(answer_id))
+            if role_id is None:
+                skipped += 1
+                continue
+
+            member = guild.get_member(int(user_key))
+            if member is None:
+                skipped += 1
+                continue
+
+            role = guild.get_role(role_id)
+            if role is None:
+                role_name = f"Poll {message_id} Option {answer_id}"
+                role = await self._create_reward_role(
+                    guild,
+                    role_name,
+                    "Auto-created missing mapped poll reward role",
+                )
+                if role is None:
+                    skipped += 1
+                    continue
+                created_or_updated_mappings[str(answer_id)] = role.id
+
+            if await self._grant_temporary_role(guild, member, role):
+                applied += 1
+            else:
+                skipped += 1
+
+        if created_or_updated_mappings:
+            async with self.config.guild(guild).poll_roles() as stored_poll_roles:
+                stored_poll_roles.setdefault(message_key, {})
+                for answer_key, new_role_id in created_or_updated_mappings.items():
+                    stored_poll_roles[message_key][answer_key] = new_role_id
+
+        async with self.config.guild(guild).poll_votes() as stored_votes:
+            stored_votes.pop(message_key, None)
+
+        async with self.config.guild(guild).poll_channels() as poll_channels:
+            poll_channels.pop(message_key, None)
+
+        return applied, skipped, "ok"
 
     async def _process_vote(self, user_id: int, source_event: str) -> None:
         applied_count = 0
@@ -137,12 +249,16 @@ class VoteRole(commands.Cog):
         user_id = getattr(payload, "user_id", None)
         message_id = getattr(payload, "message_id", None)
         answer_id = getattr(payload, "answer_id", None)
-        if user_id is None or message_id is None or answer_id is None:
+        channel_id = getattr(payload, "channel_id", None)
+        if user_id is None or message_id is None or answer_id is None or channel_id is None:
             return
 
         async with self.config.guild(guild).poll_votes() as poll_votes:
             poll_votes.setdefault(str(message_id), {})
             poll_votes[str(message_id)][str(user_id)] = int(answer_id)
+
+        async with self.config.guild(guild).poll_channels() as poll_channels:
+            poll_channels[str(message_id)] = int(channel_id)
 
     @commands.Cog.listener()
     async def on_raw_poll_vote_remove(self, payload: Any):
@@ -171,6 +287,37 @@ class VoteRole(commands.Cog):
                 del poll_votes[message_key][user_key]
             if not poll_votes[message_key]:
                 del poll_votes[message_key]
+
+    @tasks.loop(minutes=1)
+    async def _auto_finalize_polls(self):
+        for guild in self.bot.guilds:
+            poll_votes = await self.config.guild(guild).poll_votes()
+            if not poll_votes:
+                continue
+
+            poll_roles = await self.config.guild(guild).poll_roles()
+            tracked_message_ids = list(poll_votes.keys())
+            for message_key in tracked_message_ids:
+                if message_key not in poll_roles:
+                    continue
+
+                try:
+                    message_id = int(message_key)
+                except ValueError:
+                    continue
+
+                if not await self._is_poll_closed(guild, message_id):
+                    continue
+
+                applied, skipped, status = await self._finalize_poll_roles(guild, message_id)
+                if status == "ok":
+                    LOG.info(
+                        "Auto-finalized poll %s in guild %s. Applied: %s, skipped: %s",
+                        message_id,
+                        guild.id,
+                        applied,
+                        skipped,
+                    )
 
     @tasks.loop(minutes=1)
     async def _expire_vote_roles(self):
@@ -290,6 +437,10 @@ class VoteRole(commands.Cog):
 
     @_expire_vote_roles.before_loop
     async def _before_expire_vote_roles(self):
+        await self.bot.wait_until_ready()
+
+    @_auto_finalize_polls.before_loop
+    async def _before_auto_finalize_polls(self):
         await self.bot.wait_until_ready()
 
     @commands.group(name="voterole")
@@ -452,6 +603,9 @@ class VoteRole(commands.Cog):
                 return
             del poll_roles[message_key]
 
+        async with self.config.guild(ctx.guild).poll_channels() as poll_channels:
+            poll_channels.pop(message_key, None)
+
         await ctx.send(f"Cleared all option mappings for poll `{message_id}`.")
 
     @voterole_poll_group.command(name="list")
@@ -486,41 +640,13 @@ class VoteRole(commands.Cog):
     @voterole_poll_group.command(name="finalize")
     async def voterole_poll_finalize(self, ctx: commands.Context, message_id: int):
         """Assign mapped temporary roles to voters of a finished poll."""
-        message_key = str(message_id)
-        poll_roles = await self.config.guild(ctx.guild).poll_roles()
-        poll_votes = await self.config.guild(ctx.guild).poll_votes()
-
-        mappings = poll_roles.get(message_key)
-        if not mappings:
+        applied, skipped, status = await self._finalize_poll_roles(ctx.guild, message_id)
+        if status == "no_mappings":
             await ctx.send("No role mappings found for that poll message.")
             return
-
-        votes = poll_votes.get(message_key)
-        if not votes:
+        if status == "no_votes":
             await ctx.send("No tracked votes found for that poll message.")
             return
-
-        applied = 0
-        skipped = 0
-        for user_key, answer_id in votes.items():
-            role_id = mappings.get(str(answer_id))
-            if role_id is None:
-                skipped += 1
-                continue
-
-            member = ctx.guild.get_member(int(user_key))
-            role = ctx.guild.get_role(role_id)
-            if member is None or role is None:
-                skipped += 1
-                continue
-
-            if await self._grant_temporary_role(ctx.guild, member, role):
-                applied += 1
-            else:
-                skipped += 1
-
-        async with self.config.guild(ctx.guild).poll_votes() as stored_votes:
-            stored_votes.pop(message_key, None)
 
         await ctx.send(
             f"Finalized poll `{message_id}`. Applied roles: {applied}. Skipped: {skipped}."

@@ -741,7 +741,8 @@ class MarketTrade(commands.Cog):
            value="`setdrift <value>` - Set baseline price change (-0.2 to 0.2)\n"
                  "`setbullbias <value>` - Set uptrend preference (-0.4 to 0.4)\n"
                  "`interval <minutes>` - Set price update interval (1-1440)\n"
-                 "`update` - Manually trigger price update",
+                 "`tick` - Manually trigger 1 price update\n"
+                 "`ticks <count>` - Run many price updates at once (testing)",
            inline=False
        )
 
@@ -1259,6 +1260,55 @@ class MarketTrade(commands.Cog):
             await ctx.send(f"❌ Error during price update: {e}")
             import traceback
             traceback.print_exc()
+
+    @market.command(name="ticks")
+    @commands.admin_or_permissions(manage_guild=True)
+    async def market_ticks(self, ctx, count: int):
+        """Run multiple market ticks immediately (testing/stress)."""
+        if count < 1 or count > 500:
+            await ctx.send("Count must be between 1 and 500.")
+            return
+
+        await self._ensure_guild_initialized(ctx.guild.id)
+        start_assets = await self._get_assets(ctx.guild)
+        if not start_assets:
+            await ctx.send("No assets configured yet.")
+            return
+
+        await ctx.send(f"🔄 Running {count} ticks...")
+        try:
+            for _ in range(count):
+                await self._process_auto_orders(ctx.guild.id)
+                await self._update_guild_prices(ctx.guild.id)
+            await self._update_live_prices_message(ctx.guild.id)
+        except Exception as e:
+            await ctx.send(f"❌ Error during multi-tick run: {e}")
+            return
+
+        end_assets = await self._get_assets(ctx.guild)
+        movers = []
+        for symbol, after in end_assets.items():
+            before_asset = start_assets.get(symbol)
+            if before_asset is None:
+                continue
+            before = float(before_asset.get("price", 0))
+            after_price = float(after.get("price", 0))
+            if before <= 0:
+                continue
+            pct = ((after_price - before) / before) * 100
+            movers.append((abs(pct), symbol, before, after_price, pct))
+
+        movers.sort(reverse=True)
+        lines = [f"✅ Ran **{count}** ticks."]
+        if movers:
+            lines.append("Top movers:")
+            for _, symbol, before, after_price, pct in movers[:5]:
+                arrow = "📈" if pct >= 0 else "📉"
+                lines.append(
+                    f"{arrow} `{symbol}`: {humanize_number(round(before, 2))} -> "
+                    f"{humanize_number(round(after_price, 2))} ({round(pct, 2)}%)"
+                )
+        await ctx.send("\n".join(lines))
 
     @market.command(name="debug")
     @commands.admin_or_permissions(manage_guild=True)
@@ -1998,4 +2048,3 @@ class MarketTrade(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(MarketTrade(bot))
-

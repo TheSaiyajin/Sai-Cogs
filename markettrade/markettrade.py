@@ -840,6 +840,7 @@ class MarketTrade(commands.Cog):
            name="**Behavior Profiles** (Admin)",
            value="`asset setprofile <symbol> <profile>` - Set behavior profile\n"
                  "`asset profiles` - List available profiles\n"
+                 "`cycle info <symbol>` - Show current cycle profile and next shift\n"
                  "Profiles: `stable`, `uptrend`, `downtrend`, `swing`, `wild`, `bullrun`, `crash`, `recovery`, `flat`",
            inline=False
        )
@@ -1424,6 +1425,48 @@ class MarketTrade(commands.Cog):
             f"Now: {now}\n"
             f"Time since last update: {time_since:.1f} seconds\n"
             f"Ready for update: {time_since >= 60}"
+        )
+
+    @market.group(name="cycle", case_insensitive=True)
+    async def market_cycle(self, ctx):
+        """Show market profile cycle details."""
+        if ctx.invoked_subcommand is None:
+            await ctx.send_help()
+
+    @market_cycle.command(name="info")
+    async def market_cycle_info(self, ctx, symbol: str):
+        """Show current profile and next profile-shift timing for an asset."""
+        assets = await self._get_assets(ctx.guild)
+        normalized_symbol = self._normalize_symbol(symbol)
+        asset = assets.get(normalized_symbol)
+        if asset is None:
+            await ctx.send(f"`{normalized_symbol}` does not exist.")
+            return
+
+        kind = str(asset.get("kind", "stock")).strip().lower()
+        profile = self._detect_asset_profile(kind, asset)
+        next_change_ts = float(asset.get("next_profile_change_ts", 0.0))
+        now = time.time()
+
+        if profile == "custom" or next_change_ts <= 0:
+            cycle_state = "disabled (custom/manual tuning)"
+            next_shift_text = "N/A"
+        else:
+            cycle_state = "enabled"
+            remaining = max(0, int(next_change_ts - now))
+            hours = remaining // 3600
+            minutes = (remaining % 3600) // 60
+            seconds = remaining % 60
+            if remaining == 0:
+                next_shift_text = "due now (on next tick)"
+            else:
+                next_shift_text = f"in {hours}h {minutes}m {seconds}s"
+
+        await ctx.send(
+            f"`{normalized_symbol}` cycle info:\n"
+            f"Current profile: `{profile}`\n"
+            f"Cycle state: {cycle_state}\n"
+            f"Next profile shift: {next_shift_text}"
         )
 
     @market.command(name="ordersdebug")

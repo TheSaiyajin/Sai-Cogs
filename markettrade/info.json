@@ -1,13 +1,15 @@
 {
-  "author": ["YourName"],
-  "install_msg": "Thanks for installing MarketTrade. Use [p]market commands to manage assets and trading.",
+  "author": ["Sai"],
+  "install_msg": "Thanks for installing MarketTrade. Start with `[p]market help` and set your update interval with `[p]market interval <minutes>`.",
   "name": "MarketTrade",
-  "short": "Fake coin/stock trading game using bank credits",
-  "description": "A Red Discord bot cog with fake crypto/stock assets, automatic price changes, and buy/sell trading with Red bank credits.",
+  "short": "Market simulation game with stocks/crypto and auto-orders",
+  "description": "A Red Discord bot cog that simulates stock/crypto assets with configurable behavior profiles, auto price updates, manual/admin controls, and trading using Red bank credits.",
   "tags": ["economy", "game", "trading", "stocks", "crypto"],
   "requirements": [],
+  "required_cogs": {},
   "min_bot_version": "3.5.0",
+  "min_python_version": [3, 8, 0],
   "hidden": false,
   "disabled": false,
-  "end_user_data_statement": "This cog stores fake asset prices and member holdings per guild."
+  "end_user_data_statement": "This cog stores per-guild fake market asset settings/prices/events and per-member holdings, cost basis, realized profit, and auto-order configurations. It does not store real financial data."
 }

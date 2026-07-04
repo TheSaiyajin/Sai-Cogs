@@ -144,11 +144,44 @@ class MarketTrade(commands.Cog):
         step = (max_value - min_value) / (len(bars) - 1)
         return "".join(bars[min(len(bars) - 1, int((value - min_value) / step))] for value in values)
 
+    @staticmethod
+    def _parse_graph_window_minutes(window: str):
+        token = str(window).strip().lower()
+        if not token:
+            return None
+
+        multiplier = 1
+        if token.endswith("h"):
+            multiplier = 60
+            token = token[:-1]
+        elif token.endswith("m"):
+            token = token[:-1]
+
+        try:
+            amount = int(token)
+        except ValueError:
+            return None
+        return amount * multiplier
+
+    @staticmethod
+    def _compress_graph_values(values, max_points: int = 240):
+        if len(values) <= max_points:
+            return values
+        step = len(values) / float(max_points)
+        compressed = []
+        idx = 0.0
+        while int(idx) < len(values) and len(compressed) < max_points:
+            compressed.append(values[int(idx)])
+            idx += step
+        if compressed[-1] != values[-1]:
+            compressed[-1] = values[-1]
+        return compressed
+
     async def _append_price_history(self, guild_conf, symbol: str, price: float):
         async with guild_conf.price_history() as history:
             symbol_history = list(history.get(symbol, []))
             symbol_history.append(round(float(price), 2))
-            history[symbol] = symbol_history[-120:]
+            history[symbol] = symbol_history[-1440:]
 
     async def _record_prices_snapshot(self, guild_conf, assets):
         for symbol, asset in assets.items():
@@ -679,7 +712,7 @@ class MarketTrade(commands.Cog):
                  "`sell <symbol> <qty|all>` - Sell asset or everything\n"
                  "`portfolio [member]` - View holdings and value\n"
                  "`prices` - Show current asset prices\n"
-                 "`graph <symbol> [points]` - Show price history graph",
+                 "`graph <symbol> [window]` - Show price graph (`30m`, `6h`, max `24h`)",
            inline=False
        )
 
@@ -1188,10 +1221,14 @@ class MarketTrade(commands.Cog):
        await ctx.send(f"Removed all auto-sell orders for `{normalized_symbol}`.")
 
     @market.command(name="graph")
-    async def market_graph(self, ctx, symbol: str, points: int = 20):
-        """Show price history graph for an asset."""
-        if points < 5 or points > 60:
-            await ctx.send("Points must be between 5 and 60.")
+    async def market_graph(self, ctx, symbol: str, window: str = "60m"):
+        """Show price history graph for an asset (window: Xm or Xh, max 24h)."""
+        window_minutes = self._parse_graph_window_minutes(window)
+        if window_minutes is None:
+            await ctx.send("Window must be like `30m`, `90m`, `2h`, up to `24h`.")
+            return
+        if window_minutes < 1 or window_minutes > 1440:
+            await ctx.send("Window must be between 1 minute and 24 hours.")
             return
 
         normalized_symbol = self._normalize_symbol(symbol)
@@ -1205,9 +1242,10 @@ class MarketTrade(commands.Cog):
         values = list(history.get(normalized_symbol, []))
         if not values:
             values = [float(asset["price"])]
-        values = values[-points:]
+        values = values[-window_minutes:]
+        graph_values = self._compress_graph_values(values)
 
-        sparkline = self._build_sparkline(values)
+        sparkline = self._build_sparkline(graph_values)
         first = values[0]
         last = values[-1]
         change = last - first
@@ -1215,8 +1253,9 @@ class MarketTrade(commands.Cog):
         direction = "up" if change > 0 else "down" if change < 0 else "flat"
 
         await ctx.send(
-            f"`{normalized_symbol}` ({asset['name']}) last {len(values)} points:\n"
+            f"`{normalized_symbol}` ({asset['name']}) last {window_minutes} minute(s):\n"
             f"`{sparkline}`\n"
+            f"Graph points: {len(graph_values)} (sampled from {len(values)})\n"
             f"Low: {humanize_number(min(values))} | High: {humanize_number(max(values))}\n"
             f"Start: {humanize_number(round(first, 2))} | Now: {humanize_number(round(last, 2))}\n"
             f"Change: {humanize_number(round(change, 2))} ({round(change_percent, 2)}%) [{direction}]"

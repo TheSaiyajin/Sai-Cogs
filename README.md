@@ -46,7 +46,7 @@ For vote role rewards:
 
 ## MarketTrade Commands
 - `[p]market prices`
-- `[p]market graph <symbol> [points]`
+- `[p]market graph <symbol> [window]` (examples: `30m`, `6h`, max `24h`)
 - `[p]market buy <symbol> <quantity>`
 - `[p]market sell <symbol> <quantity>`
 - `[p]market portfolio [member]`

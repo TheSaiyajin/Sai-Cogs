@@ -1,4 +1,5 @@
 import discord
+import re
 from redbot.core import Config, commands
 from redbot.core.utils.chat_formatting import pagify
 
@@ -10,6 +11,11 @@ class SaiReply(commands.Cog):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=621739484158, force_registration=True)
         self.config.register_guild(channels={})
+
+    @staticmethod
+    def _message_contains_keyword(content: str, keyword: str) -> bool:
+        escaped_keyword = re.escape(keyword)
+        return re.search(rf"(?<!\w){escaped_keyword}(?!\w)", content) is not None
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -24,7 +30,7 @@ class SaiReply(commands.Cog):
         content = message.content.lower()
 
         for keyword, response in triggers.items():
-            if keyword in content:
+            if self._message_contains_keyword(content, keyword):
                 await message.reply(response, mention_author=False)
 
     @commands.group(name="saireply", aliases=["keywordreply", "kr", "sai"])

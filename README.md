@@ -8,7 +8,7 @@ This repository contains Red Discord bot cogs:
 ## Features
 - Add/remove channels in Discord with commands
 - Add/remove trigger words and replies in Discord with commands
-- Replies when configured keywords are found
+- Replies when configured keywords are found as whole words
 
 ## Setup
 1. Put the folder named `saireply` into your Red bot's `cogs` directory.

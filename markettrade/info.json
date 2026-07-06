@@ -5,7 +5,7 @@
   "short": "Market simulation game with stocks/crypto and auto-orders",
   "description": "A Red Discord bot cog that simulates stock/crypto assets with configurable behavior profiles, auto price updates, manual/admin controls, and trading using Red bank credits.",
   "tags": ["economy", "game", "trading", "stocks", "crypto"],
-  "requirements": ["Pillow"],
+  "requirements": [],
   "required_cogs": {},
   "min_bot_version": "3.5.0",
   "min_python_version": [3, 8, 0],

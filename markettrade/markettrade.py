@@ -193,11 +193,52 @@ class MarketTrade(commands.Cog):
         draw.text((x, y), text, fill=fill, font=font)
 
     @staticmethod
+    def _measure_text(draw, text, font):
+        if hasattr(draw, "textbbox"):
+            box = draw.textbbox((0, 0), text, font=font)
+            return box[2] - box[0], box[3] - box[1]
+        return draw.textsize(text, font=font)
+
+    @staticmethod
+    def _moving_average(values, window: int = 5):
+        if not values:
+            return []
+        smoothed = []
+        for idx in range(len(values)):
+            start = max(0, idx - window + 1)
+            window_values = values[start : idx + 1]
+            smoothed.append(sum(window_values) / len(window_values))
+        return smoothed
+
+    @staticmethod
+    def _blend_color(color, background, mix: float):
+        return tuple(
+            int(background[i] + (color[i] - background[i]) * mix)
+            for i in range(3)
+        )
+
+    @staticmethod
+    def _format_time_axis_label(offset_minutes: int):
+        if offset_minutes <= 0:
+            return "Now"
+        if offset_minutes % 60 == 0:
+            return f"-{offset_minutes // 60}h"
+        return f"-{offset_minutes}m"
+
+    @staticmethod
+    def _draw_dashed_horizontal_line(draw, x_start, x_end, y, color, dash=14, gap=10, width=2):
+        x = x_start
+        while x < x_end:
+            segment_end = min(x + dash, x_end)
+            draw.line((x, y, segment_end, y), fill=color, width=width)
+            x += dash + gap
+
+    @staticmethod
     def _build_graph_image(values, symbol: str, asset_name: str, window_minutes: int):
-        width, height = 1280, 760
+        width, height = 1200, 700
         margin_left, margin_right = 48, 48
-        header_h, footer_h = 96, 88
-        stats_panel_w, stats_gap = 360, 28
+        header_h, footer_h = 92, 86
+        stats_panel_w, stats_gap = 334, 24
         chart_left = margin_left + 92
         chart_top = header_h
         chart_right = width - margin_right - stats_panel_w - stats_gap
@@ -212,23 +253,37 @@ class MarketTrade(commands.Cog):
         stats_panel = (23, 31, 41)
         grid = (64, 76, 92)
         axis = (132, 149, 173)
-        line_color = (101, 184, 255)
-        fill_color = (54, 118, 189)
+        up_color = (76, 175, 80)
+        down_color = (231, 76, 60)
         text = (244, 248, 255)
         dim_text = (217, 229, 245)
-        point_color = (159, 215, 255)
+        muted_marker = (220, 230, 244)
         text_shadow = (3, 6, 12)
+        line_start_ref = (197, 205, 216, 195)
+        point_outline = (243, 248, 255, 255)
 
-        image = Image.new("RGB", (width, height), background)
+        first = values[0]
+        last = values[-1]
+        change = last - first
+        change_percent = 0.0 if first == 0 else (change / first) * 100
+        direction = "up" if change > 0 else "down" if change < 0 else "flat"
+        trend_color = up_color if change >= 0 else down_color
+        direction_color = trend_color
+        area_color = MarketTrade._blend_color(trend_color, panel, 0.55) + (110,)
+        raw_line_color = MarketTrade._blend_color(trend_color, panel, 0.70) + (140,)
+        smooth_line_color = trend_color + (255,)
+
+        image = Image.new("RGBA", (width, height), background + (255,))
         draw = ImageDraw.Draw(image)
         draw.rectangle((chart_left, chart_top, chart_right, chart_bottom), fill=panel)
         draw.rectangle((stats_left, chart_top, stats_right, chart_bottom), fill=stats_panel)
 
         title_font = MarketTrade._load_chart_font(28)
-        subtitle_font = MarketTrade._load_chart_font(22)
-        axis_font = MarketTrade._load_chart_font(23)
-        stat_label_font = MarketTrade._load_chart_font(24)
-        stat_value_font = MarketTrade._load_chart_font(30)
+        subtitle_font = MarketTrade._load_chart_font(20)
+        axis_font = MarketTrade._load_chart_font(21)
+        marker_font = MarketTrade._load_chart_font(18)
+        stat_label_font = MarketTrade._load_chart_font(22)
+        stat_value_font = MarketTrade._load_chart_font(28)
 
         min_value = min(values)
         max_value = max(values)
@@ -269,32 +324,68 @@ class MarketTrade(commands.Cog):
                 y = chart_bottom - ((value - min_value) / value_range) * chart_height
                 points.append((x, y))
 
-        if len(points) > 1:
-            draw.line(points, fill=line_color, width=4)
-            area_points = [(points[0][0], chart_bottom)] + points + [(points[-1][0], chart_bottom)]
-            draw.polygon(area_points, fill=fill_color)
-            draw.line(points, fill=line_color, width=4)
-        if points:
-            last_x, last_y = points[-1]
-            draw.ellipse((last_x - 8, last_y - 8, last_x + 8, last_y + 8), fill=point_color)
+        start_y = points[0][1]
+        MarketTrade._draw_dashed_horizontal_line(
+            draw,
+            chart_left,
+            chart_right,
+            start_y,
+            line_start_ref,
+            dash=14,
+            gap=10,
+            width=2,
+        )
 
-        first = values[0]
-        last = values[-1]
-        change = last - first
-        change_percent = 0.0 if first == 0 else (change / first) * 100
-        direction = "up" if change > 0 else "down" if change < 0 else "flat"
-        direction_color = (121, 215, 146) if change > 0 else (255, 140, 140) if change < 0 else dim_text
+        if len(points) > 1:
+            area_points = [(points[0][0], chart_bottom)] + points + [(points[-1][0], chart_bottom)]
+            draw.polygon(area_points, fill=area_color)
+            draw.line(points, fill=raw_line_color, width=2)
+            smooth_values = MarketTrade._moving_average(values, window=5)
+            smooth_points = []
+            for idx, value in enumerate(smooth_values):
+                x = chart_left + (idx * chart_width / (len(smooth_values) - 1))
+                y = chart_bottom - ((value - min_value) / value_range) * chart_height
+                smooth_points.append((x, y))
+            draw.line(smooth_points, fill=smooth_line_color, width=4)
+        elif points:
+            x, y = points[0]
+            draw.line((x - 8, y, x + 8, y), fill=smooth_line_color, width=4)
+
+        start_x, start_y = points[0]
+        now_x, now_y = points[-1]
+        draw.ellipse((start_x - 5, start_y - 5, start_x + 5, start_y + 5), fill=muted_marker + (255,))
+        draw.ellipse((now_x - 10, now_y - 10, now_x + 10, now_y + 10), fill=point_outline)
+        draw.ellipse((now_x - 7, now_y - 7, now_x + 7, now_y + 7), fill=trend_color + (255,))
+
+        high_idx = max(range(len(values)), key=lambda idx: values[idx])
+        low_idx = min(range(len(values)), key=lambda idx: values[idx])
+        high_x, high_y = points[high_idx]
+        low_x, low_y = points[low_idx]
+        draw.ellipse((high_x - 5, high_y - 5, high_x + 5, high_y + 5), fill=muted_marker + (255,))
+        draw.ellipse((low_x - 5, low_y - 5, low_x + 5, low_y + 5), fill=muted_marker + (255,))
+
+        high_label_y = max(chart_top + 8, int(high_y - 28))
+        low_label_y = min(chart_bottom - 22, int(low_y + 10))
+        high_label_x = min(max(chart_left + 8, int(high_x + 8)), chart_right - 56)
+        low_label_x = min(max(chart_left + 8, int(low_x + 8)), chart_right - 48)
+        MarketTrade._draw_shadow_text(draw, (high_label_x, high_label_y), "High", marker_font, dim_text, text_shadow)
+        MarketTrade._draw_shadow_text(draw, (low_label_x, low_label_y), "Low", marker_font, dim_text, text_shadow)
 
         title = f"{symbol} ({asset_name})"
         subtitle = f"Last {window_minutes} minute(s) - {len(values)} points"
         MarketTrade._draw_shadow_text(draw, (margin_left, 16), title, title_font, text, text_shadow)
         MarketTrade._draw_shadow_text(draw, (margin_left, 56), subtitle, subtitle_font, dim_text, text_shadow)
 
-        x_labels = [("Start", chart_left), ("Mid", chart_left + chart_width / 2), ("Now", chart_right)]
+        x_labels = [
+            (MarketTrade._format_time_axis_label(window_minutes), chart_left),
+            (MarketTrade._format_time_axis_label(window_minutes // 2), chart_left + chart_width / 2),
+            ("Now", chart_right),
+        ]
         for label, x in x_labels:
+            label_width, _ = MarketTrade._measure_text(draw, label, axis_font)
             MarketTrade._draw_shadow_text(
                 draw,
-                (int(x) - 28, chart_bottom + 18),
+                (int(x - (label_width / 2)), chart_bottom + 18),
                 label,
                 axis_font,
                 dim_text,
@@ -313,10 +404,11 @@ class MarketTrade(commands.Cog):
         for label, value, color in stats:
             MarketTrade._draw_shadow_text(draw, (stats_left + 24, stat_y), label, stat_label_font, dim_text, text_shadow)
             MarketTrade._draw_shadow_text(draw, (stats_left + 24, stat_y + 30), value, stat_value_font, color, text_shadow)
+            draw.line((stats_left + 20, stat_y + 82, stats_right - 20, stat_y + 82), fill=grid, width=1)
             stat_y += 96
 
         output = BytesIO()
-        image.save(output, format="PNG")
+        image.convert("RGB").save(output, format="PNG")
         output.seek(0)
         return output
 

@@ -1,8 +1,10 @@
+from io import BytesIO
 import random
 import time
 import traceback
 
 import discord
+from PIL import Image, ImageDraw
 from redbot.core import Config, bank, commands
 from redbot.core.utils.chat_formatting import humanize_number
 from discord.ext import tasks
@@ -133,18 +135,6 @@ class MarketTrade(commands.Cog):
         return await self.config.guild(guild).assets()
 
     @staticmethod
-    def _build_sparkline(values):
-        bars = "▁▂▃▄▅▆▇█"
-        if not values:
-            return ""
-        min_value = min(values)
-        max_value = max(values)
-        if max_value == min_value:
-            return bars[0] * len(values)
-        step = (max_value - min_value) / (len(bars) - 1)
-        return "".join(bars[min(len(bars) - 1, int((value - min_value) / step))] for value in values)
-
-    @staticmethod
     def _parse_graph_window_minutes(window: str):
         token = str(window).strip().lower()
         if not token:
@@ -176,6 +166,94 @@ class MarketTrade(commands.Cog):
         if compressed[-1] != values[-1]:
             compressed[-1] = values[-1]
         return compressed
+
+    @staticmethod
+    def _build_graph_image(values, symbol: str, asset_name: str, window_minutes: int):
+        width, height = 920, 460
+        margin_left, margin_right, margin_top, margin_bottom = 70, 30, 60, 90
+        chart_left = margin_left
+        chart_top = margin_top
+        chart_right = width - margin_right
+        chart_bottom = height - margin_bottom
+        chart_width = chart_right - chart_left
+        chart_height = chart_bottom - chart_top
+
+        background = (16, 19, 24)
+        panel = (22, 27, 34)
+        grid = (57, 67, 81)
+        axis = (115, 130, 150)
+        line_color = (78, 161, 255)
+        fill_color = (42, 100, 170)
+        text = (228, 235, 245)
+        dim_text = (168, 180, 197)
+        point_color = (140, 202, 255)
+
+        image = Image.new("RGB", (width, height), background)
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((chart_left, chart_top, chart_right, chart_bottom), fill=panel)
+
+        min_value = min(values)
+        max_value = max(values)
+        value_range = max_value - min_value
+        if value_range == 0:
+            value_range = 1.0
+
+        for i in range(5):
+            y = chart_top + (chart_height * i / 4)
+            draw.line((chart_left, y, chart_right, y), fill=grid, width=1)
+            y_value = max_value - ((max_value - min_value) * i / 4)
+            draw.text((8, y - 8), humanize_number(round(y_value, 2)), fill=dim_text)
+
+        draw.line((chart_left, chart_bottom, chart_right, chart_bottom), fill=axis, width=2)
+        draw.line((chart_left, chart_top, chart_left, chart_bottom), fill=axis, width=2)
+
+        if len(values) == 1:
+            x = chart_left + (chart_width // 2)
+            y = chart_bottom - ((values[0] - min_value) / value_range) * chart_height
+            points = [(x, y)]
+        else:
+            x_step = chart_width / (len(values) - 1)
+            points = []
+            for idx, value in enumerate(values):
+                x = chart_left + (idx * x_step)
+                y = chart_bottom - ((value - min_value) / value_range) * chart_height
+                points.append((x, y))
+
+        if len(points) > 1:
+            draw.line(points, fill=line_color, width=3)
+            area_points = [(points[0][0], chart_bottom)] + points + [(points[-1][0], chart_bottom)]
+            draw.polygon(area_points, fill=fill_color)
+            draw.line(points, fill=line_color, width=3)
+        if points:
+            last_x, last_y = points[-1]
+            draw.ellipse((last_x - 4, last_y - 4, last_x + 4, last_y + 4), fill=point_color)
+
+        first = values[0]
+        last = values[-1]
+        change = last - first
+        change_percent = 0.0 if first == 0 else (change / first) * 100
+        direction = "up" if change > 0 else "down" if change < 0 else "flat"
+
+        title = f"{symbol} ({asset_name}) - Last {window_minutes} minute(s)"
+        draw.text((chart_left, 18), title, fill=text)
+
+        draw.text((chart_left, chart_bottom + 18), f"Start: {humanize_number(round(first, 2))}", fill=dim_text)
+        draw.text((chart_left + 210, chart_bottom + 18), f"Now: {humanize_number(round(last, 2))}", fill=dim_text)
+        draw.text(
+            (chart_left + 390, chart_bottom + 18),
+            f"Change: {humanize_number(round(change, 2))} ({round(change_percent, 2)}%) [{direction}]",
+            fill=dim_text,
+        )
+        draw.text(
+            (chart_left, chart_bottom + 45),
+            f"Low: {humanize_number(round(min(values), 2))}    High: {humanize_number(round(max(values), 2))}    Points: {len(values)}",
+            fill=dim_text,
+        )
+
+        output = BytesIO()
+        image.save(output, format="PNG")
+        output.seek(0)
+        return output
 
     async def _append_price_history(self, guild_conf, symbol: str, price: float):
         async with guild_conf.price_history() as history:
@@ -1244,21 +1322,12 @@ class MarketTrade(commands.Cog):
             values = [float(asset["price"])]
         values = values[-window_minutes:]
         graph_values = self._compress_graph_values(values)
-
-        sparkline = self._build_sparkline(graph_values)
-        first = values[0]
-        last = values[-1]
-        change = last - first
-        change_percent = 0.0 if first == 0 else (change / first) * 100
-        direction = "up" if change > 0 else "down" if change < 0 else "flat"
-
+        image_buffer = self._build_graph_image(graph_values, normalized_symbol, asset["name"], window_minutes)
+        graph_file = discord.File(image_buffer, filename=f"{normalized_symbol.lower()}_graph.png")
         await ctx.send(
-            f"`{normalized_symbol}` ({asset['name']}) last {window_minutes} minute(s):\n"
-            f"`{sparkline}`\n"
-            f"Graph points: {len(graph_values)} (sampled from {len(values)})\n"
-            f"Low: {humanize_number(min(values))} | High: {humanize_number(max(values))}\n"
-            f"Start: {humanize_number(round(first, 2))} | Now: {humanize_number(round(last, 2))}\n"
-            f"Change: {humanize_number(round(change, 2))} ({round(change_percent, 2)}%) [{direction}]"
+            f"Price graph for `{normalized_symbol}` ({asset['name']}) "
+            f"using {len(graph_values)} point(s) from {len(values)} minute sample(s).",
+            file=graph_file,
         )
 
     @market.command(name="tick")

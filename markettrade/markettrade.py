@@ -168,38 +168,64 @@ class MarketTrade(commands.Cog):
         return compressed
 
     @staticmethod
+    def _load_chart_font(size: int):
+        for font_name in (
+            "C:\\Windows\\Fonts\\arial.ttf",
+            "arial.ttf",
+            "C:\\Windows\\Fonts\\segoeui.ttf",
+            "segoeui.ttf",
+            "DejaVuSans.ttf",
+            "LiberationSans-Regular.ttf",
+        ):
+            try:
+                return ImageFont.truetype(font_name, size)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    @staticmethod
+    def _draw_shadow_text(draw, xy, text, font, fill, shadow_fill):
+        x, y = xy
+        draw.text((x + 2, y + 2), text, fill=shadow_fill, font=font)
+        draw.text((x, y), text, fill=fill, font=font)
+
+    @staticmethod
     def _build_graph_image(values, symbol: str, asset_name: str, window_minutes: int):
-        width, height = 920, 460
-        margin_left, margin_right, margin_top, margin_bottom = 70, 30, 60, 90
-        chart_left = margin_left
-        chart_top = margin_top
-        chart_right = width - margin_right
-        chart_bottom = height - margin_bottom
+        width, height = 1280, 760
+        margin_left, margin_right = 48, 48
+        header_h, footer_h = 96, 88
+        stats_panel_w, stats_gap = 360, 28
+        chart_left = margin_left + 92
+        chart_top = header_h
+        chart_right = width - margin_right - stats_panel_w - stats_gap
+        chart_bottom = height - footer_h
         chart_width = chart_right - chart_left
         chart_height = chart_bottom - chart_top
+        stats_left = chart_right + stats_gap
+        stats_right = width - margin_right
 
         background = (16, 19, 24)
-        panel = (22, 27, 34)
-        grid = (57, 67, 81)
-        axis = (115, 130, 150)
-        line_color = (78, 161, 255)
-        fill_color = (42, 100, 170)
-        text = (242, 247, 255)
-        dim_text = (205, 218, 236)
-        point_color = (140, 202, 255)
-        text_shadow = (5, 8, 14)
+        panel = (21, 26, 33)
+        stats_panel = (23, 31, 41)
+        grid = (64, 76, 92)
+        axis = (132, 149, 173)
+        line_color = (101, 184, 255)
+        fill_color = (54, 118, 189)
+        text = (244, 248, 255)
+        dim_text = (217, 229, 245)
+        point_color = (159, 215, 255)
+        text_shadow = (3, 6, 12)
 
         image = Image.new("RGB", (width, height), background)
         draw = ImageDraw.Draw(image)
         draw.rectangle((chart_left, chart_top, chart_right, chart_bottom), fill=panel)
-        try:
-            title_font = ImageFont.truetype("DejaVuSans.ttf", 20)
-            label_font = ImageFont.truetype("DejaVuSans.ttf", 15)
-            value_font = ImageFont.truetype("DejaVuSans.ttf", 16)
-        except OSError:
-            title_font = ImageFont.load_default()
-            label_font = ImageFont.load_default()
-            value_font = ImageFont.load_default()
+        draw.rectangle((stats_left, chart_top, stats_right, chart_bottom), fill=stats_panel)
+
+        title_font = MarketTrade._load_chart_font(42)
+        subtitle_font = MarketTrade._load_chart_font(30)
+        axis_font = MarketTrade._load_chart_font(23)
+        stat_label_font = MarketTrade._load_chart_font(24)
+        stat_value_font = MarketTrade._load_chart_font(30)
 
         min_value = min(values)
         max_value = max(values)
@@ -207,16 +233,26 @@ class MarketTrade(commands.Cog):
         if value_range == 0:
             value_range = 1.0
 
+        for i in range(7):
+            x = chart_left + (chart_width * i / 6)
+            draw.line((x, chart_top, x, chart_bottom), fill=grid, width=1)
+
         for i in range(5):
             y = chart_top + (chart_height * i / 4)
-            draw.line((chart_left, y, chart_right, y), fill=grid, width=1)
+            draw.line((chart_left, y, chart_right, y), fill=grid, width=2)
             y_value = max_value - ((max_value - min_value) * i / 4)
             value_text = humanize_number(round(y_value, 2))
-            draw.text((10, y - 11), value_text, fill=text_shadow, font=value_font)
-            draw.text((8, y - 13), value_text, fill=dim_text, font=value_font)
+            MarketTrade._draw_shadow_text(
+                draw,
+                (margin_left, y - 16),
+                value_text,
+                axis_font,
+                dim_text,
+                text_shadow,
+            )
 
-        draw.line((chart_left, chart_bottom, chart_right, chart_bottom), fill=axis, width=2)
-        draw.line((chart_left, chart_top, chart_left, chart_bottom), fill=axis, width=2)
+        draw.line((chart_left, chart_bottom, chart_right, chart_bottom), fill=axis, width=3)
+        draw.line((chart_left, chart_top, chart_left, chart_bottom), fill=axis, width=3)
 
         if len(values) == 1:
             x = chart_left + (chart_width // 2)
@@ -231,72 +267,50 @@ class MarketTrade(commands.Cog):
                 points.append((x, y))
 
         if len(points) > 1:
-            draw.line(points, fill=line_color, width=3)
+            draw.line(points, fill=line_color, width=4)
             area_points = [(points[0][0], chart_bottom)] + points + [(points[-1][0], chart_bottom)]
             draw.polygon(area_points, fill=fill_color)
-            draw.line(points, fill=line_color, width=3)
+            draw.line(points, fill=line_color, width=4)
         if points:
             last_x, last_y = points[-1]
-            draw.ellipse((last_x - 4, last_y - 4, last_x + 4, last_y + 4), fill=point_color)
+            draw.ellipse((last_x - 8, last_y - 8, last_x + 8, last_y + 8), fill=point_color)
 
         first = values[0]
         last = values[-1]
         change = last - first
         change_percent = 0.0 if first == 0 else (change / first) * 100
         direction = "up" if change > 0 else "down" if change < 0 else "flat"
+        direction_color = (121, 215, 146) if change > 0 else (255, 140, 140) if change < 0 else dim_text
 
-        title = f"{symbol} ({asset_name}) - Last {window_minutes} minute(s)"
-        draw.text((chart_left + 1, 19), title, fill=text_shadow, font=title_font)
-        draw.text((chart_left, 18), title, fill=text, font=title_font)
+        title = f"{symbol} ({asset_name})"
+        subtitle = f"Last {window_minutes} minute(s) - {len(values)} points"
+        MarketTrade._draw_shadow_text(draw, (margin_left, 16), title, title_font, text, text_shadow)
+        MarketTrade._draw_shadow_text(draw, (margin_left, 56), subtitle, subtitle_font, dim_text, text_shadow)
 
-        draw.text(
-            (chart_left + 1, chart_bottom + 19),
-            f"Start: {humanize_number(round(first, 2))}",
-            fill=text_shadow,
-            font=label_font,
-        )
-        draw.text(
-            (chart_left, chart_bottom + 18),
-            f"Start: {humanize_number(round(first, 2))}",
-            fill=dim_text,
-            font=label_font,
-        )
-        draw.text(
-            (chart_left + 231, chart_bottom + 19),
-            f"Now: {humanize_number(round(last, 2))}",
-            fill=text_shadow,
-            font=label_font,
-        )
-        draw.text(
-            (chart_left + 230, chart_bottom + 18),
-            f"Now: {humanize_number(round(last, 2))}",
-            fill=dim_text,
-            font=label_font,
-        )
-        draw.text(
-            (chart_left + 1, chart_bottom + 47),
-            f"Change: {humanize_number(round(change, 2))} ({round(change_percent, 2)}%) [{direction}]",
-            fill=text_shadow,
-            font=label_font,
-        )
-        draw.text(
-            (chart_left, chart_bottom + 46),
-            f"Change: {humanize_number(round(change, 2))} ({round(change_percent, 2)}%) [{direction}]",
-            fill=dim_text,
-            font=label_font,
-        )
-        draw.text(
-            (chart_left + 431, chart_bottom + 19),
-            f"Low: {humanize_number(round(min(values), 2))}   High: {humanize_number(round(max(values), 2))}   Points: {len(values)}",
-            fill=text_shadow,
-            font=label_font,
-        )
-        draw.text(
-            (chart_left + 430, chart_bottom + 18),
-            f"Low: {humanize_number(round(min(values), 2))}   High: {humanize_number(round(max(values), 2))}   Points: {len(values)}",
-            fill=dim_text,
-            font=label_font,
-        )
+        x_labels = [("Start", chart_left), ("Mid", chart_left + chart_width / 2), ("Now", chart_right)]
+        for label, x in x_labels:
+            MarketTrade._draw_shadow_text(
+                draw,
+                (int(x) - 28, chart_bottom + 18),
+                label,
+                axis_font,
+                dim_text,
+                text_shadow,
+            )
+
+        stats = [
+            ("START", humanize_number(round(first, 2)), dim_text),
+            ("NOW", humanize_number(round(last, 2)), text),
+            ("CHANGE", f"{humanize_number(round(change, 2))} ({round(change_percent, 2)}%)", direction_color),
+            ("LOW", humanize_number(round(min(values), 2)), dim_text),
+            ("HIGH", humanize_number(round(max(values), 2)), dim_text),
+            ("TREND", direction.upper(), direction_color),
+        ]
+        stat_y = chart_top + 24
+        for label, value, color in stats:
+            MarketTrade._draw_shadow_text(draw, (stats_left + 24, stat_y), label, stat_label_font, dim_text, text_shadow)
+            MarketTrade._draw_shadow_text(draw, (stats_left + 24, stat_y + 30), value, stat_value_font, color, text_shadow)
+            stat_y += 96
 
         output = BytesIO()
         image.save(output, format="PNG")

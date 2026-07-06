@@ -1,4 +1,5 @@
 from io import BytesIO
+import os
 import random
 import time
 import traceback
@@ -169,7 +170,9 @@ class MarketTrade(commands.Cog):
 
     @staticmethod
     def _load_chart_font(size: int):
+        pil_font_path = os.path.join(os.path.dirname(ImageFont.__file__), "fonts", "DejaVuSans.ttf")
         for font_name in (
+            pil_font_path,
             "C:\\Windows\\Fonts\\arial.ttf",
             "arial.ttf",
             "C:\\Windows\\Fonts\\segoeui.ttf",
@@ -221,8 +224,8 @@ class MarketTrade(commands.Cog):
         draw.rectangle((chart_left, chart_top, chart_right, chart_bottom), fill=panel)
         draw.rectangle((stats_left, chart_top, stats_right, chart_bottom), fill=stats_panel)
 
-        title_font = MarketTrade._load_chart_font(36)
-        subtitle_font = MarketTrade._load_chart_font(30)
+        title_font = MarketTrade._load_chart_font(28)
+        subtitle_font = MarketTrade._load_chart_font(22)
         axis_font = MarketTrade._load_chart_font(23)
         stat_label_font = MarketTrade._load_chart_font(24)
         stat_value_font = MarketTrade._load_chart_font(30)

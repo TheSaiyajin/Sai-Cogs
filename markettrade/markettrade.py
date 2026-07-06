@@ -221,7 +221,7 @@ class MarketTrade(commands.Cog):
         draw.rectangle((chart_left, chart_top, chart_right, chart_bottom), fill=panel)
         draw.rectangle((stats_left, chart_top, stats_right, chart_bottom), fill=stats_panel)
 
-        title_font = MarketTrade._load_chart_font(42)
+        title_font = MarketTrade._load_chart_font(36)
         subtitle_font = MarketTrade._load_chart_font(30)
         axis_font = MarketTrade._load_chart_font(23)
         stat_label_font = MarketTrade._load_chart_font(24)

@@ -4,7 +4,7 @@ import time
 import traceback
 
 import discord
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from redbot.core import Config, bank, commands
 from redbot.core.utils.chat_formatting import humanize_number
 from discord.ext import tasks
@@ -184,13 +184,22 @@ class MarketTrade(commands.Cog):
         axis = (115, 130, 150)
         line_color = (78, 161, 255)
         fill_color = (42, 100, 170)
-        text = (228, 235, 245)
-        dim_text = (168, 180, 197)
+        text = (242, 247, 255)
+        dim_text = (205, 218, 236)
         point_color = (140, 202, 255)
+        text_shadow = (5, 8, 14)
 
         image = Image.new("RGB", (width, height), background)
         draw = ImageDraw.Draw(image)
         draw.rectangle((chart_left, chart_top, chart_right, chart_bottom), fill=panel)
+        try:
+            title_font = ImageFont.truetype("DejaVuSans.ttf", 20)
+            label_font = ImageFont.truetype("DejaVuSans.ttf", 15)
+            value_font = ImageFont.truetype("DejaVuSans.ttf", 16)
+        except OSError:
+            title_font = ImageFont.load_default()
+            label_font = ImageFont.load_default()
+            value_font = ImageFont.load_default()
 
         min_value = min(values)
         max_value = max(values)
@@ -202,7 +211,9 @@ class MarketTrade(commands.Cog):
             y = chart_top + (chart_height * i / 4)
             draw.line((chart_left, y, chart_right, y), fill=grid, width=1)
             y_value = max_value - ((max_value - min_value) * i / 4)
-            draw.text((8, y - 8), humanize_number(round(y_value, 2)), fill=dim_text)
+            value_text = humanize_number(round(y_value, 2))
+            draw.text((10, y - 11), value_text, fill=text_shadow, font=value_font)
+            draw.text((8, y - 13), value_text, fill=dim_text, font=value_font)
 
         draw.line((chart_left, chart_bottom, chart_right, chart_bottom), fill=axis, width=2)
         draw.line((chart_left, chart_top, chart_left, chart_bottom), fill=axis, width=2)
@@ -235,19 +246,56 @@ class MarketTrade(commands.Cog):
         direction = "up" if change > 0 else "down" if change < 0 else "flat"
 
         title = f"{symbol} ({asset_name}) - Last {window_minutes} minute(s)"
-        draw.text((chart_left, 18), title, fill=text)
+        draw.text((chart_left + 1, 19), title, fill=text_shadow, font=title_font)
+        draw.text((chart_left, 18), title, fill=text, font=title_font)
 
-        draw.text((chart_left, chart_bottom + 18), f"Start: {humanize_number(round(first, 2))}", fill=dim_text)
-        draw.text((chart_left + 210, chart_bottom + 18), f"Now: {humanize_number(round(last, 2))}", fill=dim_text)
         draw.text(
-            (chart_left + 390, chart_bottom + 18),
-            f"Change: {humanize_number(round(change, 2))} ({round(change_percent, 2)}%) [{direction}]",
-            fill=dim_text,
+            (chart_left + 1, chart_bottom + 19),
+            f"Start: {humanize_number(round(first, 2))}",
+            fill=text_shadow,
+            font=label_font,
         )
         draw.text(
-            (chart_left, chart_bottom + 45),
-            f"Low: {humanize_number(round(min(values), 2))}    High: {humanize_number(round(max(values), 2))}    Points: {len(values)}",
+            (chart_left, chart_bottom + 18),
+            f"Start: {humanize_number(round(first, 2))}",
             fill=dim_text,
+            font=label_font,
+        )
+        draw.text(
+            (chart_left + 231, chart_bottom + 19),
+            f"Now: {humanize_number(round(last, 2))}",
+            fill=text_shadow,
+            font=label_font,
+        )
+        draw.text(
+            (chart_left + 230, chart_bottom + 18),
+            f"Now: {humanize_number(round(last, 2))}",
+            fill=dim_text,
+            font=label_font,
+        )
+        draw.text(
+            (chart_left + 1, chart_bottom + 47),
+            f"Change: {humanize_number(round(change, 2))} ({round(change_percent, 2)}%) [{direction}]",
+            fill=text_shadow,
+            font=label_font,
+        )
+        draw.text(
+            (chart_left, chart_bottom + 46),
+            f"Change: {humanize_number(round(change, 2))} ({round(change_percent, 2)}%) [{direction}]",
+            fill=dim_text,
+            font=label_font,
+        )
+        draw.text(
+            (chart_left + 431, chart_bottom + 19),
+            f"Low: {humanize_number(round(min(values), 2))}   High: {humanize_number(round(max(values), 2))}   Points: {len(values)}",
+            fill=text_shadow,
+            font=label_font,
+        )
+        draw.text(
+            (chart_left + 430, chart_bottom + 18),
+            f"Low: {humanize_number(round(min(values), 2))}   High: {humanize_number(round(max(values), 2))}   Points: {len(values)}",
+            fill=dim_text,
+            font=label_font,
         )
 
         output = BytesIO()

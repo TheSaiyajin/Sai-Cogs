@@ -47,13 +47,15 @@ For vote role rewards:
 ## MarketTrade Commands
 - Common aliases:
   - Root: `[p]market` = `[p]mt`
-  - Trading: `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`
+  - Trading: `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`, `top|leaderboard|lb`
   - Auto orders: `autobuy|ab`, `autosell|as`
   - Auto order subcommands: `set|create|add`, `list|ls`, `remove|rm|del`
 - `[p]market prices`
 - `[p]market graph <symbol> [window]` (draws a PNG image, examples: `30m`, `6h`, max `24h`)
 - `[p]market buy <symbol> <quantity>`
 - `[p]market sell <symbol> <quantity>`
+- `[p]market top profit [limit]` (top total profit leaderboard)
+- `[p]market top value [limit]` (top portfolio value leaderboard)
 - `[p]market autobuy set <symbol> <target_price> <quantity>` (with ✅/❌ confirmation)
 - `[p]market autosell set <symbol> <target_price> <quantity|all>` (with ✅/❌ confirmation)
 - `[p]market autobuy list`, `[p]market autobuy remove <symbol>`
@@ -68,6 +70,8 @@ For vote role rewards:
 - `[p]market limits reset <@member>` (admin)
 - `[p]market cycle info <symbol>` (admin)
 - `[p]market cycle announce <true|false>` (admin)
+- `[p]market cycle history [limit]` (admin, recent profile change log)
+- `[p]market cycle clearhistory` (admin)
 - `[p]market event channel [#channel]` (admin, show/set announce channel)
 - `[p]market event clearchannel` (admin)
 - `[p]market portfolio [member]`

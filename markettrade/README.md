@@ -25,6 +25,7 @@ MarketTrade is a Red Discord Bot cog for simulated stock/crypto trading with Red
 3. Prices update every minute automatically
 4. Check prices: `[p]market prices`
 5. Buy assets: `[p]market buy <symbol> <qty>`
+6. Leaderboards: `[p]market top profit` / `[p]market top value`
 
 ## Common Admin Commands
 
@@ -32,6 +33,8 @@ MarketTrade is a Red Discord Bot cog for simulated stock/crypto trading with Red
 - `[p]market asset setprofile <symbol> <profile>`
 - `[p]market cycle info <symbol>`
 - `[p]market cycle announce <true|false>`
+- `[p]market cycle history [limit]`
+- `[p]market cycle clearhistory`
 - `[p]market event channel [#channel]`
 - `[p]market event clearchannel`
 - `[p]market fees show|buy|sell`
@@ -45,7 +48,7 @@ MarketTrade is a Red Discord Bot cog for simulated stock/crypto trading with Red
 ## Aliases
 
 - Root: `[p]market` = `[p]mt`
-- Trading: `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`
+- Trading: `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`, `top|leaderboard|lb`
 - Auto orders: `autobuy|ab`, `autosell|as`
 - Auto order subcommands: `set|create|add`, `list|ls`, `remove|rm|del`
 

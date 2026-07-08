@@ -30,6 +30,7 @@ class MarketTrade(commands.Cog):
             prices_cache={},
             live_prices_message={},
             price_history={},
+            profile_change_history=[],
             active_events={},
             random_events_enabled=True,
             random_event_chance_percent=0.3,
@@ -554,6 +555,29 @@ class MarketTrade(commands.Cog):
         for symbol, asset in assets.items():
             await self._append_price_history(guild_conf, symbol, float(asset["price"]))
 
+    async def _append_profile_change_history(self, guild_conf, transitions, updated_assets, max_entries: int = 200):
+        if not transitions:
+            return
+        now_ts = time.time()
+        recorded_at = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(now_ts))
+        new_entries = []
+        for symbol, old_profile, new_profile in transitions:
+            asset = updated_assets.get(symbol, {})
+            new_entries.append(
+                {
+                    "symbol": symbol,
+                    "old_profile": old_profile,
+                    "new_profile": new_profile,
+                    "price": round(float(asset.get("price", 0.0)), 2),
+                    "ts": now_ts,
+                    "recorded_at": recorded_at,
+                }
+            )
+        async with guild_conf.profile_change_history() as history:
+            merged = list(history) + new_entries
+            history.clear()
+            history.extend(merged[-max_entries:])
+
     @staticmethod
     def _format_event_line(event_data):
         return "⚡"
@@ -573,6 +597,75 @@ class MarketTrade(commands.Cog):
                 f"{humanize_number(asset['price'])} credits {trend_icon}{event_text}"
             )
         return "Current prices:\n" + "\n".join(lines)
+
+    @staticmethod
+    def _compute_member_market_stats(member_data, assets):
+        holdings = member_data.get("holdings", {}) or {}
+        cost_basis = member_data.get("cost_basis", {}) or {}
+        realized_profit = member_data.get("realized_profit", {}) or {}
+
+        total_value = 0
+        total_unrealized = 0
+        total_realized = 0
+        holdings_count = 0
+
+        for value in realized_profit.values():
+            try:
+                total_realized += int(value)
+            except (TypeError, ValueError):
+                continue
+
+        for symbol, amount in holdings.items():
+            asset = assets.get(symbol)
+            if asset is None:
+                continue
+            try:
+                amount_int = int(amount)
+            except (TypeError, ValueError):
+                continue
+            if amount_int <= 0:
+                continue
+
+            holdings_count += 1
+            current_price = float(asset.get("price", 0.0))
+            value = int(round(current_price * amount_int))
+            total_value += value
+
+            avg_buy_price = cost_basis.get(symbol)
+            if avg_buy_price is None:
+                continue
+            try:
+                avg_buy_price_float = float(avg_buy_price)
+            except (TypeError, ValueError):
+                continue
+            basis_value = int(round(avg_buy_price_float * amount_int))
+            total_unrealized += value - basis_value
+
+        total_profit = total_realized + total_unrealized
+        return {
+            "value": total_value,
+            "realized": total_realized,
+            "unrealized": total_unrealized,
+            "profit": total_profit,
+            "holdings_count": holdings_count,
+        }
+
+    async def _build_leaderboard_entries(self, guild, assets):
+        all_members = await self.config.all_members(guild)
+        entries = []
+        for member_id, member_data in all_members.items():
+            try:
+                member_id_int = int(member_id)
+            except (TypeError, ValueError):
+                continue
+            member = guild.get_member(member_id_int)
+            if member is None:
+                continue
+            stats = self._compute_member_market_stats(member_data, assets)
+            if stats["value"] <= 0 and stats["realized"] == 0 and stats["unrealized"] == 0:
+                continue
+            entries.append((member, stats))
+        return entries
 
     @staticmethod
     def _roll_random_event(active_events, assets, chance_percent: float):
@@ -1034,6 +1127,7 @@ class MarketTrade(commands.Cog):
         await guild_conf.assets.set(updated_assets)
         await guild_conf.active_events.set(active_events)
         await self._record_prices_snapshot(guild_conf, updated_assets)
+        await self._append_profile_change_history(guild_conf, profile_transitions, updated_assets)
         await guild_conf.last_update_ts.set(time.time())
         if ended_events:
             await self._announce_event_message(
@@ -1094,7 +1188,7 @@ class MarketTrade(commands.Cog):
        embed.add_field(
            name="**Aliases**",
            value="`market|mt`, `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`,\n"
-                 "`autobuy|ab`, `autosell|as`, `set|create|add`, `list|ls`, `remove|rm|del`",
+                 "`top|leaderboard|lb`, `autobuy|ab`, `autosell|as`, `set|create|add`, `list|ls`, `remove|rm|del`",
            inline=False
        )
 
@@ -1104,6 +1198,8 @@ class MarketTrade(commands.Cog):
            value="`buy <symbol> <qty>` - Buy an asset with credits\n"
                  "`sell <symbol> <qty|all>` - Sell asset or everything\n"
                  "`portfolio [member]` - View holdings and value\n"
+                 "`top profit [limit]` - Top player profit leaderboard\n"
+                 "`top value [limit]` - Top player portfolio value leaderboard\n"
                  "`prices` - Show current asset prices\n"
                  "`graph <symbol> [window]` - Show price graph (`30m`, `6h`, max `24h`)",
            inline=False
@@ -1147,7 +1243,9 @@ class MarketTrade(commands.Cog):
                value="`asset setprofile <symbol> <profile>` - Set behavior profile\n"
                      "`asset profiles` - List available profiles\n"
                      "`cycle info <symbol>` - Show current cycle profile and next shift\n"
-                    "`cycle announce <true|false>` - Toggle profile change announcements\n"
+                     "`cycle announce <true|false>` - Toggle profile change announcements\n"
+                     "`cycle history [limit]` - Show recent profile changes\n"
+                     "`cycle clearhistory` - Clear profile change history\n"
                     "Profiles: `stable`, `uptrend`, `downtrend`, `swing`, `wild`, `bullrun`, `crash`, `recovery`, `flat`",
                inline=False
            )
@@ -1698,6 +1796,52 @@ class MarketTrade(commands.Cog):
             + f"\nTotal realized P/L: {humanize_number(total_realized)} credits"
         )
 
+    @market.group(name="top", case_insensitive=True, aliases=["leaderboard", "lb"], autohelp=False)
+    async def market_top(self, ctx):
+       """View player leaderboards."""
+       if ctx.invoked_subcommand is None:
+           await self._send_group_help_hint(ctx)
+
+    @market_top.command(name="profit", aliases=["pnl", "pl"])
+    async def market_top_profit(self, ctx, limit: int = 10):
+       """Show top players by total P/L (realized + unrealized)."""
+       if limit < 1 or limit > 25:
+           await ctx.send("Limit must be between 1 and 25.")
+           return
+       assets = await self._get_assets(ctx.guild)
+       entries = await self._build_leaderboard_entries(ctx.guild, assets)
+       if not entries:
+           await ctx.send("No leaderboard data available yet.")
+           return
+       ranked = sorted(entries, key=lambda entry: entry[1]["profit"], reverse=True)[:limit]
+       lines = []
+       for index, (member, stats) in enumerate(ranked, start=1):
+           lines.append(
+               f"{index}. {member.display_name} — {humanize_number(stats['profit'])} "
+               f"(R: {humanize_number(stats['realized'])}, U: {humanize_number(stats['unrealized'])})"
+           )
+       await ctx.send("🏆 Top Profit (Realized + Unrealized):\n" + "\n".join(lines))
+
+    @market_top.command(name="value", aliases=["val"])
+    async def market_top_value(self, ctx, limit: int = 10):
+       """Show top players by current portfolio value."""
+       if limit < 1 or limit > 25:
+           await ctx.send("Limit must be between 1 and 25.")
+           return
+       assets = await self._get_assets(ctx.guild)
+       entries = await self._build_leaderboard_entries(ctx.guild, assets)
+       if not entries:
+           await ctx.send("No leaderboard data available yet.")
+           return
+       ranked = sorted(entries, key=lambda entry: entry[1]["value"], reverse=True)[:limit]
+       lines = []
+       for index, (member, stats) in enumerate(ranked, start=1):
+           lines.append(
+               f"{index}. {member.display_name} — {humanize_number(stats['value'])} credits "
+               f"({stats['holdings_count']} asset{'s' if stats['holdings_count'] != 1 else ''})"
+           )
+       await ctx.send("🏆 Top Portfolio Value:\n" + "\n".join(lines))
+
     @market.group(name="autobuy", case_insensitive=True, aliases=["ab"], autohelp=False)
     async def market_autobuy(self, ctx):
        """Manage auto-buy orders that execute when price drops to target."""
@@ -2111,6 +2255,35 @@ class MarketTrade(commands.Cog):
             )
             return
         await ctx.send("Profile change announcements are now disabled.")
+
+    @market_cycle.command(name="history")
+    async def market_cycle_history(self, ctx, limit: int = 20):
+        """Show recent profile change history (latest first)."""
+        if limit < 1 or limit > 50:
+            await ctx.send("Limit must be between 1 and 50.")
+            return
+        guild_conf = self.config.guild(ctx.guild)
+        history = list(await guild_conf.profile_change_history())
+        if not history:
+            await ctx.send("No profile change history recorded yet.")
+            return
+        lines = []
+        for entry in reversed(history[-limit:]):
+            symbol = str(entry.get("symbol", "?"))
+            old_profile = self._profile_display_name(str(entry.get("old_profile", "unknown")))
+            new_profile = self._profile_display_name(str(entry.get("new_profile", "unknown")))
+            price = humanize_number(round(float(entry.get("price", 0.0)), 2))
+            recorded_at = str(entry.get("recorded_at", "unknown time"))
+            lines.append(
+                f"- `{symbol}`: {old_profile} → {new_profile} @ {price} ({recorded_at})"
+            )
+        await ctx.send("Recent profile changes:\n" + "\n".join(lines))
+
+    @market_cycle.command(name="clearhistory")
+    async def market_cycle_clearhistory(self, ctx):
+        """Clear profile change history log for this server."""
+        await self.config.guild(ctx.guild).profile_change_history.set([])
+        await ctx.send("Cleared profile change history.")
 
     @market.command(name="ordersdebug")
     async def market_ordersdebug(self, ctx):

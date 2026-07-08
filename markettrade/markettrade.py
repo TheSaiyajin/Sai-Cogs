@@ -1,3 +1,4 @@
+import asyncio
 from io import BytesIO
 import random
 import time
@@ -33,8 +34,21 @@ class MarketTrade(commands.Cog):
             random_events_enabled=True,
             random_event_chance_percent=0.3,
             event_announce_channel_id=0,
+            announce_profile_changes=True,
+            buy_fee_rate=0.0,
+            sell_fee_rate=0.0,
+            trade_limit_value_per_day=0,
+            trade_limit_trades_per_day=0,
         )
-        self.config.register_member(holdings={}, cost_basis={}, realized_profit={}, auto_orders={})
+        self.config.register_member(
+            holdings={},
+            cost_basis={},
+            realized_profit={},
+            auto_orders={},
+            trade_limit_window_start_ts=0.0,
+            trade_limit_used_value=0,
+            trade_limit_used_trades=0,
+        )
         self.price_updater.start()
 
     def cog_unload(self):
@@ -184,6 +198,132 @@ class MarketTrade(commands.Cog):
         if offset_minutes >= 180 and offset_minutes % 60 == 0:
             return f"-{offset_minutes // 60}h"
         return f"-{offset_minutes}m"
+
+    @staticmethod
+    def _clamp_fee_rate(rate: float) -> float:
+        return max(0.0, min(1.0, float(rate)))
+
+    @staticmethod
+    def _calculate_fee(amount: int, fee_rate: float) -> int:
+        normalized_amount = max(0, int(amount))
+        normalized_rate = MarketTrade._clamp_fee_rate(fee_rate)
+        return max(0, int(round(normalized_amount * normalized_rate)))
+
+    async def _get_member_trade_limit_usage(self, member_conf):
+        now = time.time()
+        window_start = float(await member_conf.trade_limit_window_start_ts())
+        used_value = int(await member_conf.trade_limit_used_value())
+        used_trades = int(await member_conf.trade_limit_used_trades())
+        if window_start <= 0 or (now - window_start) >= 86400:
+            window_start = now
+            used_value = 0
+            used_trades = 0
+            await member_conf.trade_limit_window_start_ts.set(window_start)
+            await member_conf.trade_limit_used_value.set(used_value)
+            await member_conf.trade_limit_used_trades.set(used_trades)
+        return window_start, used_value, used_trades
+
+    async def _check_trade_limits(self, guild_conf, member_conf, gross_value: int, trades: int = 1):
+        max_value_per_day = int(await guild_conf.trade_limit_value_per_day())
+        max_trades_per_day = int(await guild_conf.trade_limit_trades_per_day())
+        _window_start, used_value, used_trades = await self._get_member_trade_limit_usage(member_conf)
+        next_used_value = used_value + max(0, int(gross_value))
+        next_used_trades = used_trades + max(0, int(trades))
+        if max_value_per_day > 0 and next_used_value > max_value_per_day:
+            remaining_value = max(0, max_value_per_day - used_value)
+            return (
+                False,
+                "Daily trading value limit reached. "
+                f"Remaining value today: {humanize_number(remaining_value)} credits.",
+            )
+        if max_trades_per_day > 0 and next_used_trades > max_trades_per_day:
+            remaining_trades = max(0, max_trades_per_day - used_trades)
+            return (
+                False,
+                "Daily trade count limit reached. "
+                f"Remaining trades today: {remaining_trades}.",
+            )
+        return True, None
+
+    async def _consume_trade_limits(self, member_conf, gross_value: int, trades: int = 1):
+        _window_start, used_value, used_trades = await self._get_member_trade_limit_usage(member_conf)
+        await member_conf.trade_limit_used_value.set(used_value + max(0, int(gross_value)))
+        await member_conf.trade_limit_used_trades.set(used_trades + max(0, int(trades)))
+
+    async def _remaining_trades_after_trade(self, guild_conf, member_conf, trades_to_consume: int = 1):
+        max_trades_per_day = int(await guild_conf.trade_limit_trades_per_day())
+        if max_trades_per_day <= 0:
+            return "unlimited"
+        _window_start, _used_value, used_trades = await self._get_member_trade_limit_usage(member_conf)
+        return str(max(0, max_trades_per_day - (used_trades + max(0, int(trades_to_consume)))))
+
+    async def _confirm_trade_action(
+        self,
+        ctx,
+        *,
+        asset_name: str,
+        side: str,
+        quantity_text: str,
+        price_per_unit_text: str,
+        total_value: int,
+        fee: int,
+        final_value: int,
+        remaining_trades_after: str,
+        timeout_seconds: int = 30,
+    ) -> bool:
+        embed = discord.Embed(
+            title="Confirm Trade",
+            color=discord.Color.gold(),
+            description=(
+                "React with ✅ to confirm or ❌ to cancel.\n"
+                f"This request auto-cancels in {timeout_seconds} seconds."
+            ),
+        )
+        embed.add_field(name="Asset", value=asset_name, inline=True)
+        embed.add_field(name="Side", value=side.upper(), inline=True)
+        embed.add_field(name="Quantity", value=quantity_text, inline=True)
+        embed.add_field(name="Price per unit", value=price_per_unit_text, inline=True)
+        embed.add_field(name="Total value", value=f"{humanize_number(total_value)} credits", inline=True)
+        embed.add_field(name="Fee", value=f"{humanize_number(fee)} credits", inline=True)
+        embed.add_field(
+            name="Final cost/profit",
+            value=f"{humanize_number(final_value)} credits",
+            inline=True,
+        )
+        embed.add_field(
+            name="Trades remaining after confirm",
+            value=remaining_trades_after,
+            inline=True,
+        )
+        confirmation_message = await ctx.send(embed=embed)
+        try:
+            await confirmation_message.add_reaction("✅")
+            await confirmation_message.add_reaction("❌")
+        except (discord.Forbidden, discord.HTTPException):
+            await ctx.send("I couldn't add confirmation reactions. Please check my permissions.")
+            return False
+
+        def reaction_check(reaction, user):
+            return (
+                reaction.message.id == confirmation_message.id
+                and user.id == ctx.author.id
+                and str(reaction.emoji) in {"✅", "❌"}
+            )
+
+        try:
+            reaction, _user = await self.bot.wait_for(
+                "reaction_add",
+                check=reaction_check,
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            await ctx.send("Trade confirmation timed out. No trade was executed.")
+            return False
+
+        if str(reaction.emoji) != "✅":
+            await ctx.send("Trade cancelled.")
+            return False
+        return True
 
     @staticmethod
     def _build_graph_image(values, symbol: str, asset_name: str, window_minutes: int):
@@ -563,6 +703,8 @@ class MarketTrade(commands.Cog):
             assets = await guild_conf.assets()
             if not assets:
                 return
+            buy_fee_rate = float(await guild_conf.buy_fee_rate())
+            sell_fee_rate = float(await guild_conf.sell_fee_rate())
 
             all_members = await self.config.all_members(guild)
             if not all_members:
@@ -609,29 +751,52 @@ class MarketTrade(commands.Cog):
 
                     if order_type == "buy":
                         if current_price <= target_price:
-                            total_cost = int(round(current_price * quantity))
-                            if total_cost <= 0:
-                                total_cost = 1
+                            base_cost = int(round(current_price * quantity))
+                            if base_cost <= 0:
+                                base_cost = 1
+                            buy_fee = self._calculate_fee(base_cost, buy_fee_rate)
+                            total_cost = base_cost + buy_fee
+                            limits_ok, limits_message = await self._check_trade_limits(
+                                guild_conf, member_conf, base_cost, trades=1
+                            )
+                            if not limits_ok:
+                                execution_log.append(
+                                    f"SKIP BUY {symbol}: trade limit reached for {member.display_name}"
+                                )
+                                continue
                             if not await bank.can_spend(member, total_cost):
                                 continue
                             await bank.withdraw_credits(member, total_cost)
                             async with member_conf.holdings() as hld, member_conf.cost_basis() as cb:
                                 current_amount = int(hld.get(symbol, 0))
-                                current_avg_price = float(cb.get(symbol, current_price))
+                                effective_fill_price = total_cost / quantity
+                                current_avg_price = float(cb.get(symbol, effective_fill_price))
                                 new_amount = current_amount + quantity
                                 hld[symbol] = new_amount
                                 if new_amount > 0:
-                                    total_cost_basis = (current_amount * current_avg_price) + (quantity * current_price)
+                                    total_cost_basis = (current_amount * current_avg_price) + (quantity * effective_fill_price)
                                     cb[symbol] = round(total_cost_basis / new_amount, 4)
+                            await self._consume_trade_limits(member_conf, base_cost, trades=1)
                             del auto_orders[order_id]
-                            execution_log.append(f"BUY: {quantity} {symbol} @ {current_price}")
+                            execution_log.append(
+                                f"BUY: {quantity} {symbol} @ {current_price} | total={total_cost} fee={buy_fee}"
+                            )
                             print(f"[Auto-Orders] BUY EXECUTED: {quantity} {symbol}")
                             try:
-                                await member.send(
-                                    f"✅ **Auto-Buy Order Executed!**\n"
-                                    f"Bought {quantity} `{symbol}` at {humanize_number(round(current_price, 2))} credits each\n"
-                                    f"Total cost: {humanize_number(total_cost)} credits"
-                                )
+                                if buy_fee > 0:
+                                    await member.send(
+                                        f"✅ **Auto-Buy Order Executed!**\n"
+                                        f"Bought {quantity} `{symbol}` at {humanize_number(round(current_price, 2))} credits each\n"
+                                        f"Base cost: {humanize_number(base_cost)} credits\n"
+                                        f"Fee: {humanize_number(buy_fee)} credits ({round(buy_fee_rate * 100, 2)}%)\n"
+                                        f"Total cost: {humanize_number(total_cost)} credits"
+                                    )
+                                else:
+                                    await member.send(
+                                        f"✅ **Auto-Buy Order Executed!**\n"
+                                        f"Bought {quantity} `{symbol}` at {humanize_number(round(current_price, 2))} credits each\n"
+                                        f"Total cost: {humanize_number(total_cost)} credits"
+                                    )
                             except (discord.Forbidden, discord.HTTPException):
                                 pass
 
@@ -642,14 +807,24 @@ class MarketTrade(commands.Cog):
                             quantity_to_sell = owned_amount if quantity == -1 else quantity
                             print(f"[Auto-Orders] SELL CHECK: owned={owned_amount}, to_sell={quantity_to_sell}, price_condition={current_price >= target_price}")
                             if owned_amount >= quantity_to_sell and quantity_to_sell > 0:
-                                total_gain = int(round(current_price * quantity_to_sell))
-                                if total_gain <= 0:
-                                    total_gain = 1
+                                gross_gain = int(round(current_price * quantity_to_sell))
+                                if gross_gain <= 0:
+                                    gross_gain = 1
+                                sell_fee = self._calculate_fee(gross_gain, sell_fee_rate)
+                                total_gain = max(0, gross_gain - sell_fee)
+                                limits_ok, limits_message = await self._check_trade_limits(
+                                    guild_conf, member_conf, gross_gain, trades=1
+                                )
+                                if not limits_ok:
+                                    execution_log.append(
+                                        f"SKIP SELL {symbol}: trade limit reached for {member.display_name}"
+                                    )
+                                    continue
                                 
                                 async with member_conf.holdings() as hld, member_conf.cost_basis() as cb, member_conf.realized_profit() as rp:
                                     current_amount = int(hld.get(symbol, 0))
                                     avg_buy_price = float(cb.get(symbol, current_price))
-                                    realized_change = int(round((current_price - avg_buy_price) * quantity_to_sell))
+                                    realized_change = int(round(total_gain - (avg_buy_price * quantity_to_sell)))
                                     previous_realized = int(rp.get(symbol, 0))
                                     rp[symbol] = previous_realized + realized_change
                                     hld[symbol] = current_amount - quantity_to_sell
@@ -657,27 +832,44 @@ class MarketTrade(commands.Cog):
                                         del hld[symbol]
                                         if symbol in cb:
                                             del cb[symbol]
+                                await self._consume_trade_limits(member_conf, gross_gain, trades=1)
                                 
                                 # Deposit credits OUTSIDE the context manager to ensure it persists
                                 try:
-                                    await bank.deposit_credits(member, total_gain)
+                                    if total_gain > 0:
+                                        await bank.deposit_credits(member, total_gain)
                                     print(f"[Auto-Orders] Deposited {total_gain} credits to {member}")
                                 except Exception as e:
                                     print(f"[Auto-Orders] ERROR depositing credits: {e}")
                                     execution_log.append(f"ERROR SELL {symbol}: Failed to deposit {total_gain} credits - {e}")
                                 
                                 del auto_orders[order_id]
-                                execution_log.append(f"SELL: {quantity_to_sell} {symbol} @ {current_price} = {total_gain} credits")
+                                execution_log.append(
+                                    f"SELL: {quantity_to_sell} {symbol} @ {current_price} | net={total_gain} fee={sell_fee}"
+                                )
                                 print(f"[Auto-Orders] SELL EXECUTED: {quantity_to_sell} {symbol} at {current_price}")
                                 try:
-                                    profit_loss = int(round((current_price - float(cb.get(symbol, current_price))) * quantity_to_sell)) if symbol in cb else total_gain
-                                    profit_loss_text = f"+{humanize_number(profit_loss)}" if profit_loss > 0 else f"{humanize_number(profit_loss)}"
-                                    await member.send(
-                                        f"✅ **Auto-Sell Order Executed!**\n"
-                                        f"Sold {quantity_to_sell} `{symbol}` at {humanize_number(round(current_price, 2))} credits each\n"
-                                        f"Total gain: {humanize_number(total_gain)} credits\n"
-                                        f"Profit/Loss: {profit_loss_text} credits"
+                                    profit_loss_text = (
+                                        f"+{humanize_number(realized_change)}"
+                                        if realized_change > 0
+                                        else humanize_number(realized_change)
                                     )
+                                    if sell_fee > 0:
+                                        await member.send(
+                                            f"✅ **Auto-Sell Order Executed!**\n"
+                                            f"Sold {quantity_to_sell} `{symbol}` at {humanize_number(round(current_price, 2))} credits each\n"
+                                            f"Gross: {humanize_number(gross_gain)} credits\n"
+                                            f"Fee: {humanize_number(sell_fee)} credits ({round(sell_fee_rate * 100, 2)}%)\n"
+                                            f"Net gain: {humanize_number(total_gain)} credits\n"
+                                            f"Profit/Loss: {profit_loss_text} credits"
+                                        )
+                                    else:
+                                        await member.send(
+                                            f"✅ **Auto-Sell Order Executed!**\n"
+                                            f"Sold {quantity_to_sell} `{symbol}` at {humanize_number(round(current_price, 2))} credits each\n"
+                                            f"Total gain: {humanize_number(total_gain)} credits\n"
+                                            f"Profit/Loss: {profit_loss_text} credits"
+                                        )
                                 except (discord.Forbidden, discord.HTTPException):
                                     pass
                             else:
@@ -819,10 +1011,12 @@ class MarketTrade(commands.Cog):
                 f"{symbol}: {self._profile_display_name(old_profile)} → {self._profile_display_name(new_profile)}"
                 for symbol, old_profile, new_profile in profile_transitions[:20]
             ]
-            await self._announce_event_message(
-                guild_id,
-                "📈 Market Profile Changes\n\n" + "\n".join(lines),
-            )
+            announce_profile_changes = bool(await guild_conf.announce_profile_changes())
+            if announce_profile_changes:
+                await self._announce_event_message(
+                    guild_id,
+                    "📈 Market Profile Changes\n\n" + "\n".join(lines),
+                )
 
     @tasks.loop(minutes=1)
     async def price_updater(self):
@@ -905,7 +1099,8 @@ class MarketTrade(commands.Cog):
            value="`asset setprofile <symbol> <profile>` - Set behavior profile\n"
                  "`asset profiles` - List available profiles\n"
                  "`cycle info <symbol>` - Show current cycle profile and next shift\n"
-                 "Profiles: `stable`, `uptrend`, `downtrend`, `swing`, `wild`, `bullrun`, `crash`, `recovery`, `flat`",
+                "`cycle announce <true|false>` - Toggle profile change announcements\n"
+                "Profiles: `stable`, `uptrend`, `downtrend`, `swing`, `wild`, `bullrun`, `crash`, `recovery`, `flat`",
            inline=False
        )
 
@@ -914,6 +1109,12 @@ class MarketTrade(commands.Cog):
            name="**Price Control** (Admin)",
            value="`setdrift <value>` - Set baseline price change (-0.2 to 0.2)\n"
                  "`setbullbias <value>` - Set uptrend preference (-0.4 to 0.4)\n"
+                 "`fees show` - Show configured trading fees\n"
+                 "`fees buy <percent>` - Set buy fee percent\n"
+                 "`fees sell <percent>` - Set sell fee percent\n"
+                 "`limits show` - Show configured trade limits\n"
+                 "`limits value <credits>` - Set daily traded value limit (0 = unlimited)\n"
+                 "`limits trades <count>` - Set daily trade count limit (0 = unlimited)\n"
                  "`tick` - Manually trigger 1 price update\n"
                  "`ticks <count>` - Run many price updates at once (testing)",
            inline=False
@@ -933,6 +1134,115 @@ class MarketTrade(commands.Cog):
 
        embed.set_footer(text="Use !!market <command> help for more info on any command")
        await ctx.send(embed=embed)
+
+    @market.group(name="fees", case_insensitive=True)
+    @commands.admin_or_permissions(manage_guild=True)
+    async def market_fees(self, ctx):
+        """Configure trading fees for buys and sells."""
+        if ctx.invoked_subcommand is None:
+            await ctx.send_help()
+
+    @market_fees.command(name="show")
+    async def market_fees_show(self, ctx):
+        """Show configured buy and sell fee percentages."""
+        guild_conf = self.config.guild(ctx.guild)
+        buy_fee_rate = float(await guild_conf.buy_fee_rate())
+        sell_fee_rate = float(await guild_conf.sell_fee_rate())
+        await ctx.send(
+            f"Trading fees:\n"
+            f"- Buy fee: {round(buy_fee_rate * 100, 2)}%\n"
+            f"- Sell fee: {round(sell_fee_rate * 100, 2)}%"
+        )
+
+    @market_fees.command(name="buy")
+    async def market_fees_buy(self, ctx, percent: float):
+        """Set buy fee percent (0-100)."""
+        if percent < 0 or percent > 100:
+            await ctx.send("Buy fee percent must be between 0 and 100.")
+            return
+        buy_fee_rate = round(percent / 100.0, 6)
+        await self.config.guild(ctx.guild).buy_fee_rate.set(buy_fee_rate)
+        await ctx.send(f"Buy fee set to {round(percent, 2)}%.")
+
+    @market_fees.command(name="sell")
+    async def market_fees_sell(self, ctx, percent: float):
+        """Set sell fee percent (0-100)."""
+        if percent < 0 or percent > 100:
+            await ctx.send("Sell fee percent must be between 0 and 100.")
+            return
+        sell_fee_rate = round(percent / 100.0, 6)
+        await self.config.guild(ctx.guild).sell_fee_rate.set(sell_fee_rate)
+        await ctx.send(f"Sell fee set to {round(percent, 2)}%.")
+
+    @market.group(name="limits", case_insensitive=True)
+    @commands.admin_or_permissions(manage_guild=True)
+    async def market_limits(self, ctx):
+        """Configure daily trading limits."""
+        if ctx.invoked_subcommand is None:
+            await ctx.send_help()
+
+    @market_limits.command(name="show")
+    async def market_limits_show(self, ctx):
+        """Show configured daily trading limits."""
+        guild_conf = self.config.guild(ctx.guild)
+        limit_value = int(await guild_conf.trade_limit_value_per_day())
+        limit_trades = int(await guild_conf.trade_limit_trades_per_day())
+        limit_value_text = "unlimited" if limit_value <= 0 else f"{humanize_number(limit_value)} credits/day"
+        limit_trades_text = "unlimited" if limit_trades <= 0 else f"{limit_trades} trades/day"
+        await ctx.send(
+            "Trading limits:\n"
+            f"- Daily traded value limit: {limit_value_text}\n"
+            f"- Daily trade count limit: {limit_trades_text}"
+        )
+
+    @market_limits.command(name="value")
+    async def market_limits_value(self, ctx, credits: int):
+        """Set daily traded value limit in credits (0 = unlimited)."""
+        if credits < 0:
+            await ctx.send("Daily traded value limit must be 0 or greater.")
+            return
+        await self.config.guild(ctx.guild).trade_limit_value_per_day.set(int(credits))
+        if credits == 0:
+            await ctx.send("Daily traded value limit set to unlimited.")
+            return
+        await ctx.send(f"Daily traded value limit set to {humanize_number(credits)} credits.")
+
+    @market_limits.command(name="trades")
+    async def market_limits_trades(self, ctx, count: int):
+        """Set daily trade count limit (0 = unlimited)."""
+        if count < 0:
+            await ctx.send("Daily trade count limit must be 0 or greater.")
+            return
+        await self.config.guild(ctx.guild).trade_limit_trades_per_day.set(int(count))
+        if count == 0:
+            await ctx.send("Daily trade count limit set to unlimited.")
+            return
+        await ctx.send(f"Daily trade count limit set to {count} trades per day.")
+
+    @market_limits.command(name="usage")
+    async def market_limits_usage(self, ctx, member: discord.Member = None):
+        """Show a member's current daily trading limit usage."""
+        target = member or ctx.author
+        member_conf = self.config.member(target)
+        window_start, used_value, used_trades = await self._get_member_trade_limit_usage(member_conf)
+        reset_in_seconds = max(0, int((window_start + 86400) - time.time()))
+        hours = reset_in_seconds // 3600
+        minutes = (reset_in_seconds % 3600) // 60
+        await ctx.send(
+            f"Trading limit usage for {target.display_name}:\n"
+            f"- Used traded value: {humanize_number(used_value)} credits\n"
+            f"- Used trades: {used_trades}\n"
+            f"- Resets in: {hours}h {minutes}m"
+        )
+
+    @market_limits.command(name="reset")
+    async def market_limits_reset(self, ctx, member: discord.Member):
+        """Reset a member's daily trading limit usage counters."""
+        member_conf = self.config.member(member)
+        await member_conf.trade_limit_window_start_ts.set(time.time())
+        await member_conf.trade_limit_used_value.set(0)
+        await member_conf.trade_limit_used_trades.set(0)
+        await ctx.send(f"Reset trading limit usage for {member.display_name}.")
 
     @market.command(name="prices")
     async def market_prices(self, ctx):
@@ -985,9 +1295,18 @@ class MarketTrade(commands.Cog):
             await ctx.send(f"Asset `{normalized_symbol}` does not exist.")
             return
 
-        total_cost = int(round(float(asset["price"]) * quantity))
-        if total_cost <= 0:
-            total_cost = 1
+        guild_conf = self.config.guild(ctx.guild)
+        buy_fee_rate = float(await guild_conf.buy_fee_rate())
+        base_cost = int(round(float(asset["price"]) * quantity))
+        if base_cost <= 0:
+            base_cost = 1
+        buy_fee = self._calculate_fee(base_cost, buy_fee_rate)
+        total_cost = base_cost + buy_fee
+        member_conf = self.config.member(ctx.author)
+        limits_ok, limits_message = await self._check_trade_limits(guild_conf, member_conf, base_cost, trades=1)
+        if not limits_ok:
+            await ctx.send(limits_message)
+            return
 
         if not await bank.can_spend(ctx.author, total_cost):
             balance = await bank.get_balance(ctx.author)
@@ -996,24 +1315,42 @@ class MarketTrade(commands.Cog):
                 f"{humanize_number(balance)} credits."
             )
             return
-
+        remaining_trades_after = await self._remaining_trades_after_trade(guild_conf, member_conf, trades_to_consume=1)
+        confirmed = await self._confirm_trade_action(
+            ctx,
+            asset_name=f"{asset['name']} ({normalized_symbol})",
+            side="buy",
+            quantity_text=str(quantity),
+            price_per_unit_text=f"{humanize_number(round(float(asset['price']), 2))} credits",
+            total_value=base_cost,
+            fee=buy_fee,
+            final_value=total_cost,
+            remaining_trades_after=remaining_trades_after,
+        )
+        if not confirmed:
+            return
         await bank.withdraw_credits(ctx.author, total_cost)
-
         fill_price = float(asset["price"])
-        member_conf = self.config.member(ctx.author)
+        effective_fill_price = total_cost / quantity
         async with member_conf.holdings() as holdings, member_conf.cost_basis() as cost_basis:
             current_amount = int(holdings.get(normalized_symbol, 0))
-            current_avg_price = float(cost_basis.get(normalized_symbol, fill_price))
+            current_avg_price = float(cost_basis.get(normalized_symbol, effective_fill_price))
             new_amount = current_amount + quantity
             holdings[normalized_symbol] = new_amount
 
             if new_amount > 0:
-                total_cost_basis = (current_amount * current_avg_price) + (quantity * fill_price)
+                total_cost_basis = (current_amount * current_avg_price) + (quantity * effective_fill_price)
                 cost_basis[normalized_symbol] = round(total_cost_basis / new_amount, 4)
+        await self._consume_trade_limits(member_conf, base_cost, trades=1)
 
-        await ctx.send(
-            f"Bought {quantity} `{normalized_symbol}` for {humanize_number(total_cost)} credits."
-        )
+        if buy_fee > 0:
+            await ctx.send(
+                f"Bought {quantity} `{normalized_symbol}` at {humanize_number(round(fill_price, 2))} each.\n"
+                f"Base cost: {humanize_number(base_cost)} | Fee: {humanize_number(buy_fee)} ({round(buy_fee_rate * 100, 2)}%)\n"
+                f"Total paid: {humanize_number(total_cost)} credits."
+            )
+            return
+        await ctx.send(f"Bought {quantity} `{normalized_symbol}` for {humanize_number(total_cost)} credits.")
 
     @market.command(name="sell")
     async def market_sell(self, ctx, symbol: str, quantity: str = None):
@@ -1021,12 +1358,63 @@ class MarketTrade(commands.Cog):
         normalized_symbol = self._normalize_symbol(symbol)
         member_conf = self.config.member(ctx.author)
         assets = await self._get_assets(ctx.guild)
+        guild_conf = self.config.guild(ctx.guild)
+        sell_fee_rate = float(await guild_conf.sell_fee_rate())
 
         if normalized_symbol == "ALL":
+            holdings_snapshot = await member_conf.holdings()
+            gross_total_estimate = 0
+            total_sell_fees_estimate = 0
+            net_total_estimate = 0
+            sold_assets_estimate = 0
+            sold_units_estimate = 0
+            for held_symbol, held_amount in holdings_snapshot.items():
+                asset = assets.get(held_symbol)
+                if asset is None:
+                    continue
+                quantity_estimate = int(held_amount)
+                if quantity_estimate <= 0:
+                    continue
+                gross_for_symbol = int(round(float(asset["price"]) * quantity_estimate))
+                if gross_for_symbol <= 0:
+                    gross_for_symbol = 1
+                fee_for_symbol = self._calculate_fee(gross_for_symbol, sell_fee_rate)
+                gross_total_estimate += gross_for_symbol
+                total_sell_fees_estimate += fee_for_symbol
+                net_total_estimate += max(0, gross_for_symbol - fee_for_symbol)
+                sold_assets_estimate += 1
+                sold_units_estimate += quantity_estimate
+
+            if sold_assets_estimate == 0:
+                await ctx.send("You have no tradable holdings to sell.")
+                return
+
+            limits_ok, limits_message = await self._check_trade_limits(
+                guild_conf, member_conf, gross_total_estimate, trades=1
+            )
+            if not limits_ok:
+                await ctx.send(limits_message)
+                return
+            remaining_trades_after = await self._remaining_trades_after_trade(guild_conf, member_conf, trades_to_consume=1)
+            confirmed = await self._confirm_trade_action(
+                ctx,
+                asset_name="All Holdings",
+                side="sell",
+                quantity_text=str(sold_units_estimate),
+                price_per_unit_text="mixed",
+                total_value=gross_total_estimate,
+                fee=total_sell_fees_estimate,
+                final_value=net_total_estimate,
+                remaining_trades_after=remaining_trades_after,
+            )
+            if not confirmed:
+                return
+
             total_gain = 0
             total_realized_change = 0
             sold_assets = 0
             sold_units = 0
+            total_sell_fees = 0
 
             async with member_conf.holdings() as holdings, member_conf.cost_basis() as cost_basis, member_conf.realized_profit() as realized_profit:
                 for held_symbol, held_amount in list(holdings.items()):
@@ -1039,16 +1427,19 @@ class MarketTrade(commands.Cog):
                         continue
 
                     sell_price = float(asset["price"])
-                    gain_for_symbol = int(round(sell_price * quantity_int))
-                    if gain_for_symbol <= 0:
-                        gain_for_symbol = 1
+                    gross_gain_for_symbol = int(round(sell_price * quantity_int))
+                    if gross_gain_for_symbol <= 0:
+                        gross_gain_for_symbol = 1
+                    sell_fee_for_symbol = self._calculate_fee(gross_gain_for_symbol, sell_fee_rate)
+                    net_gain_for_symbol = max(0, gross_gain_for_symbol - sell_fee_for_symbol)
 
                     avg_buy_price = float(cost_basis.get(held_symbol, sell_price))
-                    realized_for_symbol = int(round((sell_price - avg_buy_price) * quantity_int))
+                    realized_for_symbol = int(round(net_gain_for_symbol - (avg_buy_price * quantity_int)))
                     previous_realized = int(realized_profit.get(held_symbol, 0))
                     realized_profit[held_symbol] = previous_realized + realized_for_symbol
 
-                    total_gain += gain_for_symbol
+                    total_gain += net_gain_for_symbol
+                    total_sell_fees += sell_fee_for_symbol
                     total_realized_change += realized_for_symbol
                     sold_assets += 1
                     sold_units += quantity_int
@@ -1061,12 +1452,22 @@ class MarketTrade(commands.Cog):
                 await ctx.send("You have no tradable holdings to sell.")
                 return
 
-            await bank.deposit_credits(ctx.author, total_gain)
-            await ctx.send(
-                f"Sold all tradable holdings ({sold_units} units across {sold_assets} assets) "
-                f"for {humanize_number(total_gain)} credits. "
-                f"Realized P/L: {humanize_number(total_realized_change)} credits."
-            )
+            if total_gain > 0:
+                await bank.deposit_credits(ctx.author, total_gain)
+            await self._consume_trade_limits(member_conf, gross_total_estimate, trades=1)
+            if total_sell_fees > 0:
+                await ctx.send(
+                    f"Sold all tradable holdings ({sold_units} units across {sold_assets} assets).\n"
+                    f"Net gain: {humanize_number(total_gain)} credits | "
+                    f"Sell fees: {humanize_number(total_sell_fees)} ({round(sell_fee_rate * 100, 2)}%)\n"
+                    f"Realized P/L: {humanize_number(total_realized_change)} credits."
+                )
+            else:
+                await ctx.send(
+                    f"Sold all tradable holdings ({sold_units} units across {sold_assets} assets) "
+                    f"for {humanize_number(total_gain)} credits. "
+                    f"Realized P/L: {humanize_number(total_realized_change)} credits."
+                )
             return
 
         asset = assets.get(normalized_symbol)
@@ -1093,10 +1494,50 @@ class MarketTrade(commands.Cog):
                 return
 
         avg_buy_price = float(asset["price"])
+        gross_gain = 0
+        sell_fee = 0
+        total_gain = 0
+        realized_change = 0
+        quantity_to_sell = quantity_int
+        holdings_snapshot = await member_conf.holdings()
+        owned_amount_snapshot = int(holdings_snapshot.get(normalized_symbol, 0))
+        if quantity_to_sell == -1:
+            quantity_to_sell = owned_amount_snapshot
+        if owned_amount_snapshot < quantity_to_sell:
+            await ctx.send(f"You only own {owned_amount_snapshot} `{normalized_symbol}`.")
+            return
+        if quantity_to_sell <= 0:
+            await ctx.send(f"You only own {owned_amount_snapshot} `{normalized_symbol}`.")
+            return
+        sell_price_snapshot = float(asset["price"])
+        gross_gain_snapshot = int(round(sell_price_snapshot * quantity_to_sell))
+        if gross_gain_snapshot <= 0:
+            gross_gain_snapshot = 1
+        sell_fee_snapshot = self._calculate_fee(gross_gain_snapshot, sell_fee_rate)
+        total_gain_snapshot = max(0, gross_gain_snapshot - sell_fee_snapshot)
+        limits_ok, limits_message = await self._check_trade_limits(
+            guild_conf, member_conf, gross_gain_snapshot, trades=1
+        )
+        if not limits_ok:
+            await ctx.send(limits_message)
+            return
+        remaining_trades_after = await self._remaining_trades_after_trade(guild_conf, member_conf, trades_to_consume=1)
+        confirmed = await self._confirm_trade_action(
+            ctx,
+            asset_name=f"{asset['name']} ({normalized_symbol})",
+            side="sell",
+            quantity_text=str(quantity_to_sell),
+            price_per_unit_text=f"{humanize_number(round(sell_price_snapshot, 2))} credits",
+            total_value=gross_gain_snapshot,
+            fee=sell_fee_snapshot,
+            final_value=total_gain_snapshot,
+            remaining_trades_after=remaining_trades_after,
+        )
+        if not confirmed:
+            return
         async with member_conf.holdings() as holdings, member_conf.cost_basis() as cost_basis, member_conf.realized_profit() as realized_profit:
             owned_amount = int(holdings.get(normalized_symbol, 0))
-            if quantity_int == -1:
-                quantity_int = owned_amount
+            quantity_int = quantity_to_sell
 
             if owned_amount < quantity_int:
                 await ctx.send(f"You only own {owned_amount} `{normalized_symbol}`.")
@@ -1106,6 +1547,12 @@ class MarketTrade(commands.Cog):
                 return
 
             avg_buy_price = float(cost_basis.get(normalized_symbol, float(asset["price"])))
+            sell_price = float(asset["price"])
+            gross_gain = int(round(sell_price * quantity_int))
+            if gross_gain <= 0:
+                gross_gain = 1
+            sell_fee = self._calculate_fee(gross_gain, sell_fee_rate)
+            total_gain = max(0, gross_gain - sell_fee)
 
             holdings[normalized_symbol] = owned_amount - quantity_int
             if holdings[normalized_symbol] == 0:
@@ -1113,16 +1560,20 @@ class MarketTrade(commands.Cog):
                 if normalized_symbol in cost_basis:
                     del cost_basis[normalized_symbol]
 
-            sell_price = float(asset["price"])
-            realized_change = int(round((sell_price - avg_buy_price) * quantity_int))
+            realized_change = int(round(total_gain - (avg_buy_price * quantity_int)))
             previous_realized = int(realized_profit.get(normalized_symbol, 0))
             realized_profit[normalized_symbol] = previous_realized + realized_change
 
-        total_gain = int(round(float(asset["price"]) * quantity_int))
-        if total_gain <= 0:
-            total_gain = 1
-
-        await bank.deposit_credits(ctx.author, total_gain)
+        if total_gain > 0:
+            await bank.deposit_credits(ctx.author, total_gain)
+        await self._consume_trade_limits(member_conf, gross_gain, trades=1)
+        if sell_fee > 0:
+            await ctx.send(
+                f"Sold {quantity_int} `{normalized_symbol}` at {humanize_number(round(float(asset['price']), 2))} each.\n"
+                f"Gross: {humanize_number(gross_gain)} | Fee: {humanize_number(sell_fee)} ({round(sell_fee_rate * 100, 2)}%)\n"
+                f"Net gain: {humanize_number(total_gain)} credits | Realized P/L: {humanize_number(realized_change)} credits."
+            )
+            return
         await ctx.send(
             f"Sold {quantity_int} `{normalized_symbol}` for {humanize_number(total_gain)} credits. "
             f"Realized P/L: {humanize_number(realized_change)} credits."
@@ -1531,6 +1982,26 @@ class MarketTrade(commands.Cog):
             f"Next profile shift: {next_shift_text}"
         )
 
+    @market_cycle.command(name="announce")
+    async def market_cycle_announce(self, ctx, enabled: bool):
+        """Toggle profile change announcements in the configured event channel."""
+        guild_conf = self.config.guild(ctx.guild)
+        await guild_conf.announce_profile_changes.set(enabled)
+        channel_id = int(await guild_conf.event_announce_channel_id())
+        state = "enabled" if enabled else "disabled"
+        if enabled and channel_id:
+            await ctx.send(
+                f"Profile change announcements are now {state} in <#{channel_id}>."
+            )
+            return
+        if enabled:
+            await ctx.send(
+                "Profile change announcements are now enabled, but no announcement channel is set. "
+                "Set one with `market event channel #channel`."
+            )
+            return
+        await ctx.send("Profile change announcements are now disabled.")
+
     @market.command(name="ordersdebug")
     async def market_ordersdebug(self, ctx):
         """Show your auto-orders for debugging."""
@@ -1761,13 +2232,15 @@ class MarketTrade(commands.Cog):
         """List active market events."""
         active_events = await self.config.guild(ctx.guild).active_events()
         announce_channel_id = int(await self.config.guild(ctx.guild).event_announce_channel_id())
+        announce_profile_changes = bool(await self.config.guild(ctx.guild).announce_profile_changes())
+        profile_changes_line = f"Profile change announcements: {'enabled' if announce_profile_changes else 'disabled'}"
         if not active_events:
             if announce_channel_id:
                 await ctx.send(
-                    f"There are no active events.\nAnnouncement channel: <#{announce_channel_id}>"
+                    f"There are no active events.\nAnnouncement channel: <#{announce_channel_id}>\n{profile_changes_line}"
                 )
             else:
-                await ctx.send("There are no active events.\nAnnouncement channel: not set.")
+                await ctx.send(f"There are no active events.\nAnnouncement channel: not set.\n{profile_changes_line}")
             return
 
         lines = []
@@ -1788,7 +2261,7 @@ class MarketTrade(commands.Cog):
             if announce_channel_id
             else "Announcement channel: not set."
         )
-        await ctx.send("Active events:\n" + "\n".join(lines) + f"\n{announcement_line}")
+        await ctx.send("Active events:\n" + "\n".join(lines) + f"\n{announcement_line}\n{profile_changes_line}")
 
     @market_event.command(name="channel")
     async def market_event_channel(self, ctx, channel: discord.TextChannel = None):

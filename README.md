@@ -49,6 +49,14 @@ For vote role rewards:
 - `[p]market graph <symbol> [window]` (draws a PNG image, examples: `30m`, `6h`, max `24h`)
 - `[p]market buy <symbol> <quantity>`
 - `[p]market sell <symbol> <quantity>`
+- `[p]market fees show` (admin)
+- `[p]market fees buy <percent>` (admin)
+- `[p]market fees sell <percent>` (admin)
+- `[p]market limits show` (admin)
+- `[p]market limits value <credits>` (admin, 0 = unlimited)
+- `[p]market limits trades <count>` (admin, 0 = unlimited)
+- `[p]market limits usage [member]` (admin)
+- `[p]market limits reset <@member>` (admin)
 - `[p]market portfolio [member]`
 - `[p]market tick` (admin, force immediate update)
 - `[p]market liveprices` (admin, creates one message that auto-edits every minute)

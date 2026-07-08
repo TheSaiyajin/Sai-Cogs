@@ -1082,8 +1082,8 @@ class MarketTrade(commands.Cog):
        """Show all market trading commands."""
        can_view_admin = False
        try:
-          can_view_admin = await commands.admin_or_permissions(manage_guild=True).predicate(ctx)
-       except commands.CheckFailure:
+          can_view_admin = await self.market_admin.can_run(ctx)
+       except commands.CommandError:
           can_view_admin = False
 
        embed = discord.Embed(

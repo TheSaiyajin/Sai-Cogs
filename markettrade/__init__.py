@@ -3,4 +3,13 @@ __red_end_user_data_statement__ = (
     "cost basis, realized profit, and auto-order configurations. It does not store real financial data."
 )
 
-from .markettrade import setup
+import importlib
+
+from . import events, markettrade, profiles
+
+
+async def setup(bot):
+    importlib.reload(profiles)
+    importlib.reload(events)
+    importlib.reload(markettrade)
+    await markettrade.setup(bot)

@@ -54,7 +54,8 @@ class MarketTrade(commands.Cog):
         self.price_updater.start()
 
     def cog_unload(self):
-        self.price_updater.cancel()
+        if self.price_updater.is_running():
+            self.price_updater.cancel()
 
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:
@@ -546,8 +547,10 @@ class MarketTrade(commands.Cog):
             stat_y -= stat_step
 
         output = BytesIO()
-        fig.savefig(output, format="png", dpi=120, facecolor=fig.get_facecolor())
-        plt.close(fig)
+        try:
+            fig.savefig(output, format="png", dpi=120, facecolor=fig.get_facecolor())
+        finally:
+            plt.close(fig)
         output.seek(0)
         return output
 

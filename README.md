@@ -45,6 +45,7 @@ For vote role rewards:
 2. Start trading with defaults, or add your own assets in Discord.
 
 ## MarketTrade Commands
+- Common aliases: `[p]mt` for `[p]market`, `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`, `autobuy|ab`, `autosell|as`.
 - `[p]market prices`
 - `[p]market graph <symbol> [window]` (draws a PNG image, examples: `30m`, `6h`, max `24h`)
 - `[p]market buy <symbol> <quantity>`

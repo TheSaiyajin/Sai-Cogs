@@ -329,6 +329,46 @@ class MarketTrade(commands.Cog):
             return False
         return True
 
+    async def _confirm_order_setup(self, ctx, *, title: str, lines, timeout_seconds: int = 30) -> bool:
+        embed = discord.Embed(
+            title=title,
+            color=discord.Color.gold(),
+            description=(
+                "\n".join(lines)
+                + "\n\nReact with ✅ to confirm or ❌ to cancel.\n"
+                f"This request auto-cancels in {timeout_seconds} seconds."
+            ),
+        )
+        confirmation_message = await ctx.send(embed=embed)
+        try:
+            await confirmation_message.add_reaction("✅")
+            await confirmation_message.add_reaction("❌")
+        except (discord.Forbidden, discord.HTTPException):
+            await ctx.send("I couldn't add confirmation reactions. Please check my permissions.")
+            return False
+
+        def reaction_check(reaction, user):
+            return (
+                reaction.message.id == confirmation_message.id
+                and user.id == ctx.author.id
+                and str(reaction.emoji) in {"✅", "❌"}
+            )
+
+        try:
+            reaction, _user = await self.bot.wait_for(
+                "reaction_add",
+                check=reaction_check,
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            await ctx.send("Order setup confirmation timed out. No order was created.")
+            return False
+
+        if str(reaction.emoji) != "✅":
+            await ctx.send("Order setup cancelled.")
+            return False
+        return True
+
     @staticmethod
     def _build_graph_image(values, symbol: str, asset_name: str, window_minutes: int):
         import matplotlib
@@ -1041,14 +1081,14 @@ class MarketTrade(commands.Cog):
     async def before_price_updater(self):
         await self.bot.wait_until_red_ready()
 
-    @commands.group(case_insensitive=True)
+    @commands.group(case_insensitive=True, aliases=["mt"])
     @commands.guild_only()
     async def market(self, ctx):
         """Fake market game commands."""
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
-    @market.command(name="help")
+    @market.command(name="help", aliases=["commands", "cmds"])
     async def market_help(self, ctx):
        """Show all market trading commands."""
        embed = discord.Embed(
@@ -1251,7 +1291,7 @@ class MarketTrade(commands.Cog):
         await member_conf.trade_limit_used_trades.set(0)
         await ctx.send(f"Reset trading limit usage for {member.display_name}.")
 
-    @market.command(name="prices")
+    @market.command(name="prices", aliases=["price", "pr"])
     async def market_prices(self, ctx):
         """Show current asset prices."""
         assets = await self._get_assets(ctx.guild)
@@ -1288,7 +1328,7 @@ class MarketTrade(commands.Cog):
         cache[channel_key] = {"message_id": sent_message.id, "ts": now}
         await self.config.guild(ctx.guild).prices_cache.set(cache)
 
-    @market.command(name="buy")
+    @market.command(name="buy", aliases=["b"])
     async def market_buy(self, ctx, symbol: str, quantity: int):
         """Buy an asset with bank credits."""
         if quantity <= 0:
@@ -1359,7 +1399,7 @@ class MarketTrade(commands.Cog):
             return
         await ctx.send(f"Bought {quantity} `{normalized_symbol}` for {humanize_number(total_cost)} credits.")
 
-    @market.command(name="sell")
+    @market.command(name="sell", aliases=["s"])
     async def market_sell(self, ctx, symbol: str, quantity: str = None):
         """Sell an owned asset for bank credits. Use `all` to sell everything."""
         normalized_symbol = self._normalize_symbol(symbol)
@@ -1586,7 +1626,7 @@ class MarketTrade(commands.Cog):
             f"Realized P/L: {humanize_number(realized_change)} credits."
         )
 
-    @market.command(name="portfolio")
+    @market.command(name="portfolio", aliases=["pf", "port"])
     async def market_portfolio(self, ctx, member: discord.Member = None):
         """Show a member's holdings and estimated value."""
         target = member or ctx.author
@@ -1651,13 +1691,13 @@ class MarketTrade(commands.Cog):
             + f"\nTotal realized P/L: {humanize_number(total_realized)} credits"
         )
 
-    @market.group(name="autobuy", case_insensitive=True)
+    @market.group(name="autobuy", case_insensitive=True, aliases=["ab"])
     async def market_autobuy(self, ctx):
        """Manage auto-buy orders that execute when price drops to target."""
        if ctx.invoked_subcommand is None:
            await ctx.send_help()
 
-    @market_autobuy.command(name="set")
+    @market_autobuy.command(name="set", aliases=["create", "add"])
     async def market_autobuy_set(self, ctx, symbol: str, target_price: float, quantity: int):
        """Set an auto-buy order. Buys when price drops to or below target."""
        if quantity <= 0:
@@ -1674,6 +1714,28 @@ class MarketTrade(commands.Cog):
            await ctx.send(f"Asset `{normalized_symbol}` does not exist.")
            return
 
+       buy_fee_rate = float(await self.config.guild(ctx.guild).buy_fee_rate())
+       estimated_value = int(round(target_price * quantity))
+       if estimated_value <= 0:
+           estimated_value = 1
+       estimated_fee = self._calculate_fee(estimated_value, buy_fee_rate)
+       estimated_total = estimated_value + estimated_fee
+       confirmed = await self._confirm_order_setup(
+           ctx,
+           title="Confirm Auto-Buy Order",
+           lines=[
+               f"Asset: {asset['name']} (`{normalized_symbol}`)",
+               "Side: AUTO-BUY",
+               f"Quantity: {quantity}",
+               f"Trigger price: {humanize_number(round(target_price, 2))} credits",
+               f"Estimated value: {humanize_number(estimated_value)} credits",
+               f"Estimated fee: {humanize_number(estimated_fee)} credits ({round(buy_fee_rate * 100, 2)}%)",
+               f"Estimated final cost: {humanize_number(estimated_total)} credits",
+           ],
+       )
+       if not confirmed:
+           return
+
        order_id = f"{normalized_symbol}_{ctx.author.id}_{int(time.time() * 1000) % 10000}"
        member_conf = self.config.member(ctx.author)
        async with member_conf.auto_orders() as orders:
@@ -1688,7 +1750,7 @@ class MarketTrade(commands.Cog):
            f"Auto-buy order set: Buy {quantity} `{normalized_symbol}` when price drops to {humanize_number(round(target_price, 2))} credits."
        )
 
-    @market_autobuy.command(name="list")
+    @market_autobuy.command(name="list", aliases=["ls"])
     async def market_autobuy_list(self, ctx):
        """List all your active auto-buy orders."""
        member_conf = self.config.member(ctx.author)
@@ -1708,7 +1770,7 @@ class MarketTrade(commands.Cog):
 
        await ctx.send("Your auto-buy orders:\n" + "\n".join(lines))
 
-    @market_autobuy.command(name="remove")
+    @market_autobuy.command(name="remove", aliases=["rm", "del"])
     async def market_autobuy_remove(self, ctx, symbol: str):
        """Remove all auto-buy orders for a symbol."""
        normalized_symbol = self._normalize_symbol(symbol)
@@ -1727,13 +1789,13 @@ class MarketTrade(commands.Cog):
 
        await ctx.send(f"Removed all auto-buy orders for `{normalized_symbol}`.")
 
-    @market.group(name="autosell", case_insensitive=True)
+    @market.group(name="autosell", case_insensitive=True, aliases=["as"])
     async def market_autosell(self, ctx):
        """Manage auto-sell orders that execute when price rises to target."""
        if ctx.invoked_subcommand is None:
            await ctx.send_help()
 
-    @market_autosell.command(name="set")
+    @market_autosell.command(name="set", aliases=["create", "add"])
     async def market_autosell_set(self, ctx, symbol: str, target_price: float, quantity: str = None):
        """Set an auto-sell order. Sells when price rises to or above target. Use 'all' to sell everything."""
        if target_price <= 0:
@@ -1772,6 +1834,43 @@ class MarketTrade(commands.Cog):
                await ctx.send(f"You only own {owned_amount} `{normalized_symbol}` but trying to sell {quantity_int}.")
                return
 
+       sell_fee_rate = float(await self.config.guild(ctx.guild).sell_fee_rate())
+       if quantity_int == -1:
+           confirmed = await self._confirm_order_setup(
+               ctx,
+               title="Confirm Auto-Sell Order",
+               lines=[
+                   f"Asset: {asset['name']} (`{normalized_symbol}`)",
+                   "Side: AUTO-SELL",
+                   "Quantity: all holdings at trigger time",
+                   f"Trigger price: {humanize_number(round(target_price, 2))} credits",
+                   "Estimated value: dynamic",
+                   f"Estimated fee: {round(sell_fee_rate * 100, 2)}% (dynamic amount)",
+                   "Estimated final profit: dynamic",
+               ],
+           )
+       else:
+           estimated_value = int(round(target_price * quantity_int))
+           if estimated_value <= 0:
+               estimated_value = 1
+           estimated_fee = self._calculate_fee(estimated_value, sell_fee_rate)
+           estimated_final = max(0, estimated_value - estimated_fee)
+           confirmed = await self._confirm_order_setup(
+               ctx,
+               title="Confirm Auto-Sell Order",
+               lines=[
+                   f"Asset: {asset['name']} (`{normalized_symbol}`)",
+                   "Side: AUTO-SELL",
+                   f"Quantity: {quantity_int}",
+                   f"Trigger price: {humanize_number(round(target_price, 2))} credits",
+                   f"Estimated value: {humanize_number(estimated_value)} credits",
+                   f"Estimated fee: {humanize_number(estimated_fee)} credits ({round(sell_fee_rate * 100, 2)}%)",
+                   f"Estimated final profit: {humanize_number(estimated_final)} credits",
+               ],
+           )
+       if not confirmed:
+           return
+
        order_id = f"{normalized_symbol}_{ctx.author.id}_{int(time.time() * 1000) % 10000}"
        async with member_conf.auto_orders() as orders:
            orders[order_id] = {
@@ -1790,7 +1889,7 @@ class MarketTrade(commands.Cog):
                f"Auto-sell order set: Sell {quantity_int} `{normalized_symbol}` when price rises to {humanize_number(round(target_price, 2))} credits."
            )
 
-    @market_autosell.command(name="list")
+    @market_autosell.command(name="list", aliases=["ls"])
     async def market_autosell_list(self, ctx):
        """List all your active auto-sell orders."""
        member_conf = self.config.member(ctx.author)
@@ -1813,7 +1912,7 @@ class MarketTrade(commands.Cog):
 
        await ctx.send("Your auto-sell orders:\n" + "\n".join(lines))
 
-    @market_autosell.command(name="remove")
+    @market_autosell.command(name="remove", aliases=["rm", "del"])
     async def market_autosell_remove(self, ctx, symbol: str):
        """Remove all auto-sell orders for a symbol."""
        normalized_symbol = self._normalize_symbol(symbol)
@@ -1832,7 +1931,7 @@ class MarketTrade(commands.Cog):
 
        await ctx.send(f"Removed all auto-sell orders for `{normalized_symbol}`.")
 
-    @market.command(name="graph")
+    @market.command(name="graph", aliases=["chart", "g"])
     async def market_graph(self, ctx, symbol: str, window: str = "60m"):
         """Show price history graph for an asset (window: Xm or Xh, max 24h)."""
         window_minutes = self._parse_graph_window_minutes(window)

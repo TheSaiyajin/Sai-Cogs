@@ -46,6 +46,7 @@ class MarketTrade(commands.Cog):
             realized_profit={},
             auto_orders={},
             trade_limit_window_start_ts=0.0,
+            trade_limit_reset_day="",
             trade_limit_used_value=0,
             trade_limit_used_trades=0,
         )
@@ -211,13 +212,16 @@ class MarketTrade(commands.Cog):
 
     async def _get_member_trade_limit_usage(self, member_conf):
         now = time.time()
+        current_day = time.strftime("%Y-%m-%d", time.gmtime(now))
+        reset_day = str(await member_conf.trade_limit_reset_day())
         window_start = float(await member_conf.trade_limit_window_start_ts())
         used_value = int(await member_conf.trade_limit_used_value())
         used_trades = int(await member_conf.trade_limit_used_trades())
-        if window_start <= 0 or (now - window_start) >= 86400:
+        if reset_day != current_day:
             window_start = now
             used_value = 0
             used_trades = 0
+            await member_conf.trade_limit_reset_day.set(current_day)
             await member_conf.trade_limit_window_start_ts.set(window_start)
             await member_conf.trade_limit_used_value.set(used_value)
             await member_conf.trade_limit_used_trades.set(used_trades)
@@ -1224,8 +1228,10 @@ class MarketTrade(commands.Cog):
         """Show a member's current daily trading limit usage."""
         target = member or ctx.author
         member_conf = self.config.member(target)
-        window_start, used_value, used_trades = await self._get_member_trade_limit_usage(member_conf)
-        reset_in_seconds = max(0, int((window_start + 86400) - time.time()))
+        _window_start, used_value, used_trades = await self._get_member_trade_limit_usage(member_conf)
+        now_gmt = time.gmtime()
+        seconds_since_midnight = (now_gmt.tm_hour * 3600) + (now_gmt.tm_min * 60) + now_gmt.tm_sec
+        reset_in_seconds = max(0, 86400 - seconds_since_midnight)
         hours = reset_in_seconds // 3600
         minutes = (reset_in_seconds % 3600) // 60
         await ctx.send(
@@ -1239,6 +1245,7 @@ class MarketTrade(commands.Cog):
     async def market_limits_reset(self, ctx, member: discord.Member):
         """Reset a member's daily trading limit usage counters."""
         member_conf = self.config.member(member)
+        await member_conf.trade_limit_reset_day.set(time.strftime("%Y-%m-%d", time.gmtime()))
         await member_conf.trade_limit_window_start_ts.set(time.time())
         await member_conf.trade_limit_used_value.set(0)
         await member_conf.trade_limit_used_trades.set(0)

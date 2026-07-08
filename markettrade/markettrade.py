@@ -371,11 +371,19 @@ class MarketTrade(commands.Cog):
 
     async def _send_group_help_hint(self, ctx):
         command_name = ctx.command.qualified_name if ctx.command else "market"
-        market_alias_name = command_name.replace("market", "mt", 1)
-        await ctx.send(
-            f"Maybe you meant `{ctx.clean_prefix}{market_alias_name} help` "
-            f"(or `{ctx.clean_prefix}{command_name} help`)."
-        )
+        command_parts = command_name.split()
+        root_invoked_name = None
+        invoked_parents = list(getattr(ctx, "invoked_parents", []))
+        if invoked_parents:
+            root_invoked_name = invoked_parents[0]
+        elif getattr(ctx, "invoked_with", None):
+            root_invoked_name = str(ctx.invoked_with)
+        if not root_invoked_name:
+            root_invoked_name = "market"
+        if command_parts and command_parts[0] == "market":
+            command_parts[0] = root_invoked_name
+        hinted_command = " ".join(command_parts)
+        await ctx.send(f"Maybe you meant `{ctx.clean_prefix}{hinted_command} help`.")
 
     @staticmethod
     def _build_graph_image(values, symbol: str, asset_name: str, window_minutes: int):
@@ -1049,7 +1057,7 @@ class MarketTrade(commands.Cog):
     async def before_price_updater(self):
         await self.bot.wait_until_red_ready()
 
-    @commands.group(case_insensitive=True, aliases=["mt"])
+    @commands.group(case_insensitive=True, aliases=["mt"], autohelp=False)
     @commands.guild_only()
     async def market(self, ctx):
         """Fake market game commands."""
@@ -1158,7 +1166,7 @@ class MarketTrade(commands.Cog):
        embed.set_footer(text="Use [p]market <command> help for more info on any command")
        await ctx.send(embed=embed)
 
-    @market.group(name="fees", case_insensitive=True)
+    @market.group(name="fees", case_insensitive=True, autohelp=False)
     @commands.admin_or_permissions(manage_guild=True)
     async def market_fees(self, ctx):
         """Configure trading fees for buys and sells."""
@@ -1197,7 +1205,7 @@ class MarketTrade(commands.Cog):
         await self.config.guild(ctx.guild).sell_fee_rate.set(sell_fee_rate)
         await ctx.send(f"Sell fee set to {round(percent, 2)}%.")
 
-    @market.group(name="limits", case_insensitive=True)
+    @market.group(name="limits", case_insensitive=True, autohelp=False)
     @commands.admin_or_permissions(manage_guild=True)
     async def market_limits(self, ctx):
         """Configure daily trading limits."""
@@ -1670,7 +1678,7 @@ class MarketTrade(commands.Cog):
             + f"\nTotal realized P/L: {humanize_number(total_realized)} credits"
         )
 
-    @market.group(name="autobuy", case_insensitive=True, aliases=["ab"])
+    @market.group(name="autobuy", case_insensitive=True, aliases=["ab"], autohelp=False)
     async def market_autobuy(self, ctx):
        """Manage auto-buy orders that execute when price drops to target."""
        if ctx.invoked_subcommand is None:
@@ -1768,7 +1776,7 @@ class MarketTrade(commands.Cog):
 
        await ctx.send(f"Removed all auto-buy orders for `{normalized_symbol}`.")
 
-    @market.group(name="autosell", case_insensitive=True, aliases=["as"])
+    @market.group(name="autosell", case_insensitive=True, aliases=["as"], autohelp=False)
     async def market_autosell(self, ctx):
        """Manage auto-sell orders that execute when price rises to target."""
        if ctx.invoked_subcommand is None:
@@ -2022,7 +2030,7 @@ class MarketTrade(commands.Cog):
             f"Ready for update: {time_since >= 60}"
         )
 
-    @market.group(name="cycle", case_insensitive=True)
+    @market.group(name="cycle", case_insensitive=True, autohelp=False)
     @commands.admin_or_permissions(manage_guild=True)
     async def market_cycle(self, ctx):
         """Show market profile cycle details."""
@@ -2173,7 +2181,7 @@ class MarketTrade(commands.Cog):
         
         await ctx.send("\n".join(lines))
 
-    @market.group(name="admin", case_insensitive=True)
+    @market.group(name="admin", case_insensitive=True, autohelp=False)
     @commands.admin_or_permissions(manage_guild=True)
     async def market_admin(self, ctx):
         """Admin commands for market management."""
@@ -2302,7 +2310,7 @@ class MarketTrade(commands.Cog):
         )
         await ctx.send("Live prices message created. I will update it every minute.")
 
-    @market.group(name="event", case_insensitive=True)
+    @market.group(name="event", case_insensitive=True, autohelp=False)
     @commands.admin_or_permissions(manage_guild=True)
     async def market_event(self, ctx):
         """Manage temporary market events."""
@@ -2434,7 +2442,7 @@ class MarketTrade(commands.Cog):
         await self.config.guild(ctx.guild).random_event_chance_percent.set(round(percent, 2))
         await ctx.send(f"Random event chance set to {round(percent, 2)}% per update tick.")
 
-    @market.group(name="asset", case_insensitive=True)
+    @market.group(name="asset", case_insensitive=True, autohelp=False)
     @commands.admin_or_permissions(manage_guild=True)
     async def market_asset(self, ctx):
         """Manage assets in this server."""

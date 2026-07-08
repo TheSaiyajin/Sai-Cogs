@@ -1,4 +1,5 @@
 import asyncio
+import difflib
 from io import BytesIO
 import random
 import time
@@ -383,6 +384,25 @@ class MarketTrade(commands.Cog):
         if command_parts and command_parts[0] == "market":
             command_parts[0] = root_invoked_name
         hinted_command = " ".join(command_parts)
+        subcommand_passed = str(getattr(ctx, "subcommand_passed", "") or "").strip()
+        if subcommand_passed and ctx.command is not None:
+            if subcommand_passed.lower() in {"help", "h"}:
+                await ctx.send_help(ctx.command)
+                return
+            available = sorted(set(ctx.command.all_commands.keys()))
+            if available:
+                closest = difflib.get_close_matches(subcommand_passed, available, n=1, cutoff=0.45)
+                if closest:
+                    await ctx.send(
+                        f"Unknown subcommand `{subcommand_passed}`. "
+                        f"Maybe you meant `{ctx.clean_prefix}{hinted_command} {closest[0]}`."
+                    )
+                    return
+            await ctx.send(
+                f"Unknown subcommand `{subcommand_passed}`. "
+                f"Use `{ctx.clean_prefix}{hinted_command} help`."
+            )
+            return
         await ctx.send(f"Maybe you meant `{ctx.clean_prefix}{hinted_command} help`.")
 
     @staticmethod

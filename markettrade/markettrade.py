@@ -1,5 +1,4 @@
 import asyncio
-import difflib
 from io import BytesIO
 import random
 import time
@@ -390,21 +389,12 @@ class MarketTrade(commands.Cog):
             if subcommand_passed.lower() in {"help", "h"}:
                 await ctx.send_help(ctx.command)
                 return
-            available = sorted(set(ctx.command.all_commands.keys()))
-            if available:
-                closest = difflib.get_close_matches(subcommand_passed, available, n=1, cutoff=0.45)
-                if closest:
-                    await ctx.send(
-                        f"Unknown subcommand `{subcommand_passed}`. "
-                        f"Maybe you meant `{ctx.clean_prefix}{hinted_command} {closest[0]}`."
-                    )
-                    return
             await ctx.send(
-                f"Unknown subcommand `{subcommand_passed}`. "
-                f"Use `{ctx.clean_prefix}{hinted_command} help`."
+                f"You made a mistake in subcommand `{subcommand_passed}`. "
+                f"Use `{ctx.clean_prefix}{hinted_command} help` to see valid subcommands."
             )
             return
-        await ctx.send(f"Maybe you meant `{ctx.clean_prefix}{hinted_command} help`.")
+        await ctx.send(f"Use `{ctx.clean_prefix}{hinted_command} help` to see subcommands.")
 
     @staticmethod
     def _build_graph_image(values, symbol: str, asset_name: str, window_minutes: int):

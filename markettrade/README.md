@@ -5,10 +5,16 @@ MarketTrade is a Red Discord Bot cog for simulated stock/crypto trading with Red
 ## Features
 
 - Configurable fake assets (stock/crypto)
-- Behavior profiles (`stable`, `uptrend`, `downtrend`, `swing`, `wild`)
+- Behavior profiles (`stable`, `uptrend`, `downtrend`, `swing`, `wild`, `bullrun`, `crash`, `recovery`, `flat`)
 - Automatic and manual price ticks
 - Auto-buy and auto-sell orders
+- Buy/sell confirmation prompts with ✅/❌ and timeout
+- Auto-order setup confirmation prompts with ✅/❌ and timeout
+- Configurable buy/sell fees
+- Configurable daily trading limits (manual + auto orders consume limits)
+- Daily UTC reset for trade-limit usage
 - Portfolio tracking with cost basis and realized/unrealized P/L
+- Profile-cycle announcements with configurable channel/toggle
 - Optional live-updating price message
 - Admin testing tools (`tick`, `ticks`, `triggerorders`)
 
@@ -24,11 +30,24 @@ MarketTrade is a Red Discord Bot cog for simulated stock/crypto trading with Red
 
 - `[p]market asset add <symbol> <stock|crypto> <price> <name...>`
 - `[p]market asset setprofile <symbol> <profile>`
+- `[p]market cycle info <symbol>`
+- `[p]market cycle announce <true|false>`
+- `[p]market event channel [#channel]`
+- `[p]market event clearchannel`
+- `[p]market fees show|buy|sell`
+- `[p]market limits show|value|trades|usage|reset`
 - `[p]market asset setprice <symbol> <price>`
 - `[p]market asset setminprice <symbol> <price>`
 - `[p]market asset setmaxprice <symbol> <price>`
 - `[p]market tick`
 - `[p]market ticks <count>`
+
+## Aliases
+
+- Root: `[p]market` = `[p]mt`
+- Trading: `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`
+- Auto orders: `autobuy|ab`, `autosell|as`
+- Auto order subcommands: `set|create|add`, `list|ls`, `remove|rm|del`
 
 ## Data Statement
 

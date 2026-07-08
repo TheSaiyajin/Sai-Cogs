@@ -602,27 +602,7 @@ class MarketTrade(commands.Cog):
 
         await message.edit(content=prices_text)
 
-    @staticmethod
-    def _default_asset_behavior(kind: str):
-        if kind == "crypto":
-            return {
-                "volatility": 0.08,
-                "risk": 1.2,
-                "momentum": 0.68,
-                "reversal_accel": 0.08,
-                "drift": 0.001,
-                "bull_bias": 0.06,
-            }
-        return {
-            "volatility": 0.05,
-            "risk": 1.0,
-            "momentum": 0.58,
-            "reversal_accel": 0.09,
-            "drift": 0.0006,
-            "bull_bias": 0.05,
-        }
-
-    def _behavior_profile(self, kind: str, profile: str):
+    def _behavior_profile(self, profile: str):
         return behavior_profile(profile)
 
     @staticmethod
@@ -633,8 +613,7 @@ class MarketTrade(commands.Cog):
         return next_profile(current_profile)
 
     def _apply_profile_to_asset(self, asset: dict, profile_name: str, now_ts: float):
-        kind = str(asset.get("kind", "stock")).strip().lower()
-        profile_data = self._behavior_profile(kind, profile_name)
+        profile_data = self._behavior_profile(profile_name)
         if profile_data is None:
             return dict(asset)
 
@@ -653,7 +632,7 @@ class MarketTrade(commands.Cog):
         updated_asset["trend_streak"] = 0
         return updated_asset
 
-    def _detect_asset_profile(self, kind: str, asset: dict) -> str:
+    def _detect_asset_profile(self, asset: dict) -> str:
         return detect_asset_profile(asset)
 
     async def _process_auto_orders_debug(self, guild_id: int):
@@ -754,21 +733,16 @@ class MarketTrade(commands.Cog):
             if not all_members:
                 return
 
-            print(f"[Auto-Orders] Processing {len(all_members)} members, {len(assets)} assets: {list(assets.keys())}")
-
             for member_id, member_data in all_members.items():
                 auto_orders = member_data.get("auto_orders", {})
                 if not auto_orders:
                     continue
-
-                print(f"[Auto-Orders] Member {member_id} has {len(auto_orders)} orders")
 
                 try:
                     member_id_int = int(member_id)
                     # Get the Member object from the guild for bank operations
                     member = guild.get_member(member_id_int)
                     if member is None:
-                        print(f"[Auto-Orders] Member {member_id_int} not in guild, skipping")
                         continue
                 except (ValueError, TypeError):
                     continue
@@ -782,16 +756,11 @@ class MarketTrade(commands.Cog):
                     target_price = float(order.get("target_price", 0))
                     quantity = int(order.get("quantity", 0))
 
-                    print(f"[Auto-Orders] Order {order_id}: type={order_type}, symbol={symbol}, target={target_price}, qty={quantity}")
-
                     if symbol not in assets or target_price <= 0 or (quantity <= 0 and quantity != -1):
-                        print(f"[Auto-Orders] Skipped: symbol_in_assets={symbol in assets}, target_valid={target_price > 0}, qty_valid={quantity > 0 or quantity == -1}")
                         continue
 
                     asset = assets[symbol]
                     current_price = float(asset.get("price", 0))
-
-                    print(f"[Auto-Orders] {symbol}: current={current_price}, target={target_price}, type={order_type}")
 
                     if order_type == "buy":
                         if current_price <= target_price:
@@ -800,7 +769,7 @@ class MarketTrade(commands.Cog):
                                 base_cost = 1
                             buy_fee = self._calculate_fee(base_cost, buy_fee_rate)
                             total_cost = base_cost + buy_fee
-                            limits_ok, limits_message = await self._check_trade_limits(
+                            limits_ok, _limits_message = await self._check_trade_limits(
                                 guild_conf, member_conf, base_cost, trades=1
                             )
                             if not limits_ok:
@@ -825,7 +794,6 @@ class MarketTrade(commands.Cog):
                             execution_log.append(
                                 f"BUY: {quantity} {symbol} @ {current_price} | total={total_cost} fee={buy_fee}"
                             )
-                            print(f"[Auto-Orders] BUY EXECUTED: {quantity} {symbol}")
                             try:
                                 if buy_fee > 0:
                                     await member.send(
@@ -849,14 +817,13 @@ class MarketTrade(commands.Cog):
                             current_holdings = await member_conf.holdings()
                             owned_amount = int(current_holdings.get(symbol, 0))
                             quantity_to_sell = owned_amount if quantity == -1 else quantity
-                            print(f"[Auto-Orders] SELL CHECK: owned={owned_amount}, to_sell={quantity_to_sell}, price_condition={current_price >= target_price}")
                             if owned_amount >= quantity_to_sell and quantity_to_sell > 0:
                                 gross_gain = int(round(current_price * quantity_to_sell))
                                 if gross_gain <= 0:
                                     gross_gain = 1
                                 sell_fee = self._calculate_fee(gross_gain, sell_fee_rate)
                                 total_gain = max(0, gross_gain - sell_fee)
-                                limits_ok, limits_message = await self._check_trade_limits(
+                                limits_ok, _limits_message = await self._check_trade_limits(
                                     guild_conf, member_conf, gross_gain, trades=1
                                 )
                                 if not limits_ok:
@@ -882,16 +849,13 @@ class MarketTrade(commands.Cog):
                                 try:
                                     if total_gain > 0:
                                         await bank.deposit_credits(member, total_gain)
-                                    print(f"[Auto-Orders] Deposited {total_gain} credits to {member}")
                                 except Exception as e:
-                                    print(f"[Auto-Orders] ERROR depositing credits: {e}")
                                     execution_log.append(f"ERROR SELL {symbol}: Failed to deposit {total_gain} credits - {e}")
                                 
                                 del auto_orders[order_id]
                                 execution_log.append(
                                     f"SELL: {quantity_to_sell} {symbol} @ {current_price} | net={total_gain} fee={sell_fee}"
                                 )
-                                print(f"[Auto-Orders] SELL EXECUTED: {quantity_to_sell} {symbol} at {current_price}")
                                 try:
                                     profit_loss_text = (
                                         f"+{humanize_number(realized_change)}"
@@ -916,13 +880,10 @@ class MarketTrade(commands.Cog):
                                         )
                                 except (discord.Forbidden, discord.HTTPException):
                                     pass
-                            else:
-                                print(f"[Auto-Orders] SELL FAILED: {symbol} owned={owned_amount}, need={quantity_to_sell}")
 
                 await member_conf.auto_orders.set(auto_orders)
         except Exception as e:
             print(f"Error in _process_auto_orders: {e}")
-            import traceback
             traceback.print_exc()
         
         return execution_log
@@ -961,7 +922,7 @@ class MarketTrade(commands.Cog):
         now_ts = time.time()
         for symbol, asset in assets.items():
             working_asset = dict(asset)
-            current_profile = self._detect_asset_profile(str(working_asset.get("kind", "stock")).strip().lower(), working_asset)
+            current_profile = self._detect_asset_profile(working_asset)
             if current_profile != "custom":
                 if not float(working_asset.get("next_profile_change_ts", 0.0)):
                     working_asset["next_profile_change_ts"] = now_ts + self._profile_transition_window_seconds()
@@ -1066,7 +1027,7 @@ class MarketTrade(commands.Cog):
     async def price_updater(self):
         all_guilds = await self.config.all_guilds()
 
-        for guild_id, data in all_guilds.items():
+        for guild_id in all_guilds:
             try:
                 parsed_guild_id = int(guild_id)
                 await self._process_auto_orders(parsed_guild_id)
@@ -1074,7 +1035,6 @@ class MarketTrade(commands.Cog):
                 await self._update_live_prices_message(parsed_guild_id)
             except Exception as e:
                 print(f"Error in price_updater for guild {guild_id}: {e}")
-                import traceback
                 traceback.print_exc()
 
     @price_updater.before_loop
@@ -1096,6 +1056,12 @@ class MarketTrade(commands.Cog):
            description="Complete list of all market trading commands",
            color=discord.Color.green()
        )
+       embed.add_field(
+           name="**Aliases**",
+           value="`market|mt`, `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`,\n"
+                 "`autobuy|ab`, `autosell|as`, `set|create|add`, `list|ls`, `remove|rm|del`",
+           inline=False
+       )
 
        # Trading Commands
        embed.add_field(
@@ -1113,6 +1079,7 @@ class MarketTrade(commands.Cog):
            name="**Auto-Buy Orders**",
            value="`autobuy set <symbol> <price> <qty>` - Buy when price drops\n"
                  "`autobuy list` - List your auto-buy orders\n"
+                 "(order setup requires ✅/❌ confirmation)\n"
                  "`autobuy remove <symbol>` - Remove auto-buy orders",
            inline=False
        )
@@ -1121,6 +1088,7 @@ class MarketTrade(commands.Cog):
            name="**Auto-Sell Orders**",
            value="`autosell set <symbol> <price> <qty|all>` - Sell when price rises\n"
                  "`autosell list` - List your auto-sell orders\n"
+                 "(order setup requires ✅/❌ confirmation)\n"
                  "`autosell remove <symbol>` - Remove auto-sell orders",
            inline=False
        )
@@ -1158,7 +1126,9 @@ class MarketTrade(commands.Cog):
                  "`fees sell <percent>` - Set sell fee percent\n"
                  "`limits show` - Show configured trade limits\n"
                  "`limits value <credits>` - Set daily traded value limit (0 = unlimited)\n"
+                 "`limits usage [member]` - Show daily usage counters\n"
                  "`limits trades <count>` - Set daily trade count limit (0 = unlimited)\n"
+                 "`limits reset <member>` - Reset a member usage counters\n"
                  "`tick` - Manually trigger 1 price update\n"
                  "`ticks <count>` - Run many price updates at once (testing)",
            inline=False
@@ -1172,11 +1142,12 @@ class MarketTrade(commands.Cog):
                  "`event clear [symbol]` - Clear event(s)\n"
                  "`event random <enabled>` - Enable/disable random events\n"
                  "`event chance <percent>` - Set random event chance\n"
-                 "`event channel` - Set announcement channel",
+                 "`event channel [#channel]` - Show/set announcement channel\n"
+                 "`event clearchannel` - Clear announcement channel",
            inline=False
        )
 
-       embed.set_footer(text="Use !!market <command> help for more info on any command")
+       embed.set_footer(text="Use [p]market <command> help for more info on any command")
        await ctx.send(embed=embed)
 
     @market.group(name="fees", case_insensitive=True)
@@ -1974,7 +1945,6 @@ class MarketTrade(commands.Cog):
             await ctx.send("✅ Prices updated.")
         except Exception as e:
             await ctx.send(f"❌ Error during price update: {e}")
-            import traceback
             traceback.print_exc()
 
     @market.command(name="ticks")
@@ -2030,7 +2000,6 @@ class MarketTrade(commands.Cog):
     @commands.admin_or_permissions(manage_guild=True)
     async def market_debug(self, ctx):
         """Show debug info about price update timing."""
-        import time
         guild_conf = self.config.guild(ctx.guild)
         last_update_ts = await guild_conf.last_update_ts()
         now = time.time()
@@ -2062,8 +2031,7 @@ class MarketTrade(commands.Cog):
             await ctx.send(f"`{normalized_symbol}` does not exist.")
             return
 
-        kind = str(asset.get("kind", "stock")).strip().lower()
-        profile = self._detect_asset_profile(kind, asset)
+        profile = self._detect_asset_profile(asset)
         next_change_ts = float(asset.get("next_profile_change_ts", 0.0))
         now = time.time()
 
@@ -2480,7 +2448,7 @@ class MarketTrade(commands.Cog):
 
         min_price = max(1.0, round(starting_price * 0.05, 2))
         max_price = round(starting_price * 20, 2)
-        defaults = self._behavior_profile(normalized_kind, "stable")
+        defaults = self._behavior_profile("stable")
 
         async with self.config.guild(ctx.guild).assets() as assets:
             if normalized_symbol in assets:
@@ -2582,8 +2550,7 @@ class MarketTrade(commands.Cog):
         trend = int(asset.get("trend", 0))
         trend_streak = max(0, int(asset.get("trend_streak", 0)))
         trend_text = "up" if trend > 0 else "down" if trend < 0 else "flat"
-        kind = str(asset.get("kind", "stock")).strip().lower()
-        profile = self._detect_asset_profile(kind, asset)
+        profile = self._detect_asset_profile(asset)
 
         await ctx.send(
             f"`{normalized_symbol}` ({asset.get('kind', 'unknown')}) {asset.get('name', 'Unknown')}:\n"
@@ -2624,8 +2591,7 @@ class MarketTrade(commands.Cog):
                 await ctx.send(f"`{normalized_symbol}` does not exist.")
                 return
 
-            kind = str(asset.get("kind", "stock")).strip().lower()
-            selected = self._behavior_profile(kind, normalized_profile)
+            selected = self._behavior_profile(normalized_profile)
             if selected is None:
                 await ctx.send(
                     "Unknown profile. Use one of: `stable`, `uptrend`, `downtrend`, `swing`, `wild`, `bullrun`, `crash`, `recovery`, `flat`."

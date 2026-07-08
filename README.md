@@ -45,11 +45,19 @@ For vote role rewards:
 2. Start trading with defaults, or add your own assets in Discord.
 
 ## MarketTrade Commands
-- Common aliases: `[p]mt` for `[p]market`, `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`, `autobuy|ab`, `autosell|as`.
+- Common aliases:
+  - Root: `[p]market` = `[p]mt`
+  - Trading: `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`
+  - Auto orders: `autobuy|ab`, `autosell|as`
+  - Auto order subcommands: `set|create|add`, `list|ls`, `remove|rm|del`
 - `[p]market prices`
 - `[p]market graph <symbol> [window]` (draws a PNG image, examples: `30m`, `6h`, max `24h`)
 - `[p]market buy <symbol> <quantity>`
 - `[p]market sell <symbol> <quantity>`
+- `[p]market autobuy set <symbol> <target_price> <quantity>` (with ✅/❌ confirmation)
+- `[p]market autosell set <symbol> <target_price> <quantity|all>` (with ✅/❌ confirmation)
+- `[p]market autobuy list`, `[p]market autobuy remove <symbol>`
+- `[p]market autosell list`, `[p]market autosell remove <symbol>`
 - `[p]market fees show` (admin)
 - `[p]market fees buy <percent>` (admin)
 - `[p]market fees sell <percent>` (admin)
@@ -58,6 +66,10 @@ For vote role rewards:
 - `[p]market limits trades <count>` (admin, 0 = unlimited)
 - `[p]market limits usage [member]` (admin)
 - `[p]market limits reset <@member>` (admin)
+- `[p]market cycle info <symbol>` (admin)
+- `[p]market cycle announce <true|false>` (admin)
+- `[p]market event channel [#channel]` (admin, show/set announce channel)
+- `[p]market event clearchannel` (admin)
 - `[p]market portfolio [member]`
 - `[p]market tick` (admin, force immediate update)
 - `[p]market liveprices` (admin, creates one message that auto-edits every minute)

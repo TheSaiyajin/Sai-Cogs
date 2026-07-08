@@ -369,6 +369,14 @@ class MarketTrade(commands.Cog):
             return False
         return True
 
+    async def _send_group_help_hint(self, ctx):
+        command_name = ctx.command.qualified_name if ctx.command else "market"
+        market_alias_name = command_name.replace("market", "mt", 1)
+        await ctx.send(
+            f"Maybe you meant `{ctx.clean_prefix}{market_alias_name} help` "
+            f"(or `{ctx.clean_prefix}{command_name} help`)."
+        )
+
     @staticmethod
     def _build_graph_image(values, symbol: str, asset_name: str, window_minutes: int):
         import matplotlib
@@ -1046,7 +1054,7 @@ class MarketTrade(commands.Cog):
     async def market(self, ctx):
         """Fake market game commands."""
         if ctx.invoked_subcommand is None:
-            await ctx.send_help()
+            await self._send_group_help_hint(ctx)
 
     @market.command(name="help", aliases=["commands", "cmds"])
     async def market_help(self, ctx):
@@ -1155,7 +1163,7 @@ class MarketTrade(commands.Cog):
     async def market_fees(self, ctx):
         """Configure trading fees for buys and sells."""
         if ctx.invoked_subcommand is None:
-            await ctx.send_help()
+            await self._send_group_help_hint(ctx)
 
     @market_fees.command(name="show")
     async def market_fees_show(self, ctx):
@@ -1194,7 +1202,7 @@ class MarketTrade(commands.Cog):
     async def market_limits(self, ctx):
         """Configure daily trading limits."""
         if ctx.invoked_subcommand is None:
-            await ctx.send_help()
+            await self._send_group_help_hint(ctx)
 
     @market_limits.command(name="show")
     async def market_limits_show(self, ctx):
@@ -1666,7 +1674,7 @@ class MarketTrade(commands.Cog):
     async def market_autobuy(self, ctx):
        """Manage auto-buy orders that execute when price drops to target."""
        if ctx.invoked_subcommand is None:
-           await ctx.send_help()
+           await self._send_group_help_hint(ctx)
 
     @market_autobuy.command(name="set", aliases=["create", "add"])
     async def market_autobuy_set(self, ctx, symbol: str, target_price: float, quantity: int):
@@ -1764,7 +1772,7 @@ class MarketTrade(commands.Cog):
     async def market_autosell(self, ctx):
        """Manage auto-sell orders that execute when price rises to target."""
        if ctx.invoked_subcommand is None:
-           await ctx.send_help()
+           await self._send_group_help_hint(ctx)
 
     @market_autosell.command(name="set", aliases=["create", "add"])
     async def market_autosell_set(self, ctx, symbol: str, target_price: float, quantity: str = None):
@@ -2019,7 +2027,7 @@ class MarketTrade(commands.Cog):
     async def market_cycle(self, ctx):
         """Show market profile cycle details."""
         if ctx.invoked_subcommand is None:
-            await ctx.send_help()
+            await self._send_group_help_hint(ctx)
 
     @market_cycle.command(name="info")
     async def market_cycle_info(self, ctx, symbol: str):
@@ -2170,7 +2178,7 @@ class MarketTrade(commands.Cog):
     async def market_admin(self, ctx):
         """Admin commands for market management."""
         if ctx.invoked_subcommand is None:
-            await ctx.send_help()
+            await self._send_group_help_hint(ctx)
 
     @market_admin.command(name="deposit")
     async def market_admin_deposit(self, ctx, member: discord.Member, symbol: str, quantity: int):
@@ -2299,7 +2307,7 @@ class MarketTrade(commands.Cog):
     async def market_event(self, ctx):
         """Manage temporary market events."""
         if ctx.invoked_subcommand is None:
-            await ctx.send_help()
+            await self._send_group_help_hint(ctx)
 
     @market_event.command(name="list")
     async def market_event_list(self, ctx):
@@ -2431,7 +2439,7 @@ class MarketTrade(commands.Cog):
     async def market_asset(self, ctx):
         """Manage assets in this server."""
         if ctx.invoked_subcommand is None:
-            await ctx.send_help()
+            await self._send_group_help_hint(ctx)
 
     @market_asset.command(name="add")
     async def market_asset_add(self, ctx, symbol: str, kind: str, starting_price: float, *, name: str):

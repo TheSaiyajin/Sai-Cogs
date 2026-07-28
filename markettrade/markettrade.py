@@ -1300,7 +1300,8 @@ class MarketTrade(commands.Cog):
                      "`asset info <symbol>` - Show asset details & profile\n"
                      "`asset setprice <symbol> <price>` - Set asset price\n"
                      "`asset setminprice <symbol> <price>` - Set minimum price\n"
-                     "`asset setmaxprice <symbol> <price>` - Set maximum price",
+                     "`asset setmaxprice <symbol> <price>` - Set maximum price\n"
+                     "`admin setalllimits <min> <max>` - Set min/max for all assets",
                inline=False
            )
 
@@ -2987,6 +2988,42 @@ class MarketTrade(commands.Cog):
 
         await ctx.send(
             f"`{normalized_symbol}` maximum price set to {humanize_number(rounded_max_price)}."
+        )
+
+    @market_admin.command(name="setalllimits")
+    async def market_admin_setalllimits(self, ctx, min_price: float, max_price: float):
+        """Set the min and max price range for every asset."""
+        await self._ensure_guild_initialized(ctx.guild.id)
+        if min_price <= 0 or max_price <= 0:
+            await ctx.send("Both min and max price must be greater than 0.")
+            return
+
+        rounded_min_price = round(min_price, 2)
+        rounded_max_price = round(max_price, 2)
+        if rounded_min_price > rounded_max_price:
+            await ctx.send("Min price cannot be greater than max price.")
+            return
+
+        async with self.config.guild(ctx.guild).assets() as assets:
+            if not assets:
+                await ctx.send("No assets configured yet.")
+                return
+
+            updated_count = 0
+            for symbol, asset in assets.items():
+                asset["min_price"] = rounded_min_price
+                asset["max_price"] = rounded_max_price
+                current_price = round(float(asset.get("price", rounded_min_price)), 2)
+                if current_price < rounded_min_price:
+                    asset["price"] = rounded_min_price
+                elif current_price > rounded_max_price:
+                    asset["price"] = rounded_max_price
+                assets[symbol] = asset
+                updated_count += 1
+
+        await ctx.send(
+            f"Updated min/max for **{updated_count}** assets to "
+            f"{humanize_number(rounded_min_price)} - {humanize_number(rounded_max_price)}."
         )
 
     @market_asset.command(name="setvolatility")

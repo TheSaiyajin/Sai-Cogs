@@ -582,7 +582,7 @@ class MarketTrade(commands.Cog):
     def _format_event_line(event_data):
         return "⚡"
 
-    def _build_prices_text(self, assets, active_events=None):
+    def _build_price_lines(self, assets, active_events=None):
         active_events = active_events or {}
         lines = []
         for symbol, asset in sorted(assets.items()):
@@ -596,7 +596,73 @@ class MarketTrade(commands.Cog):
                 f"- `{symbol}` ({asset['kind']}) {asset['name']}: "
                 f"{humanize_number(asset['price'])} credits {trend_icon}{event_text}"
             )
-        return "Current prices:\n" + "\n".join(lines)
+        return lines
+
+    def _build_prices_pages(self, assets, active_events=None, max_chars: int = 1800):
+        lines = self._build_price_lines(assets, active_events)
+        if not lines:
+            return ["Current prices:\nNo assets configured yet."]
+
+        pages = []
+        current_lines = []
+        current_len = len("Current prices:\n")
+        for line in lines:
+            line_len = len(line)
+            separator = 1 if current_lines else 0
+            if current_lines and (current_len + separator + line_len) > max_chars:
+                pages.append(current_lines)
+                current_lines = [line]
+                current_len = len("Current prices:\n") + line_len
+            else:
+                if current_lines:
+                    current_len += 1
+                current_lines.append(line)
+                current_len += line_len
+
+        if current_lines:
+            pages.append(current_lines)
+
+        total_pages = len(pages)
+        rendered = []
+        for index, page_lines in enumerate(pages, start=1):
+            header = f"Current prices ({index}/{total_pages}):"
+            rendered.append("\n".join([header, *page_lines]))
+        return rendered
+
+    async def _sync_live_price_pages(self, channel, pages, existing_message_ids=None):
+        existing_message_ids = [int(message_id) for message_id in (existing_message_ids or []) if int(message_id) > 0]
+        messages = []
+
+        for index, page in enumerate(pages):
+            if index < len(existing_message_ids):
+                message_id = existing_message_ids[index]
+                try:
+                    message = await channel.fetch_message(message_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    message = await channel.send(page)
+                else:
+                    if message.author.id == self.bot.user.id:
+                        try:
+                            await message.edit(content=page)
+                        except (discord.Forbidden, discord.HTTPException):
+                            message = await channel.send(page)
+                    else:
+                        message = await channel.send(page)
+            else:
+                message = await channel.send(page)
+            messages.append(message)
+
+        for message_id in existing_message_ids[len(pages):]:
+            try:
+                old_message = await channel.fetch_message(message_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                continue
+            try:
+                await old_message.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+
+        return messages
 
     @staticmethod
     def _compute_member_market_stats(member_data, assets):
@@ -695,8 +761,7 @@ class MarketTrade(commands.Cog):
         guild_conf = self.config.guild_from_id(guild_id)
         live_data = await guild_conf.live_prices_message()
         channel_id = int(live_data.get("channel_id", 0))
-        message_id = int(live_data.get("message_id", 0))
-        if not channel_id or not message_id:
+        if not channel_id:
             return
 
         guild = self.bot.get_guild(guild_id)
@@ -713,16 +778,18 @@ class MarketTrade(commands.Cog):
             return
 
         active_events = await guild_conf.active_events()
-        prices_text = self._build_prices_text(assets, active_events)
-        try:
-            message = await channel.fetch_message(message_id)
-        except discord.NotFound:
-            await guild_conf.live_prices_message.set({})
-            return
-        except (discord.Forbidden, discord.HTTPException):
-            return
+        price_pages = self._build_prices_pages(assets, active_events)
+        live_data_message_ids = live_data.get("message_ids")
+        if isinstance(live_data_message_ids, list):
+            existing_message_ids = [int(value) for value in live_data_message_ids if int(value) > 0]
+        else:
+            message_id = int(live_data.get("message_id", 0))
+            existing_message_ids = [message_id] if message_id else []
 
-        await message.edit(content=prices_text)
+        messages = await self._sync_live_price_pages(channel, price_pages, existing_message_ids)
+        await guild_conf.live_prices_message.set(
+            {"channel_id": channel_id, "message_ids": [message.id for message in messages]}
+        )
 
     def _behavior_profile(self, profile: str):
         return behavior_profile(profile)
@@ -1405,7 +1472,7 @@ class MarketTrade(commands.Cog):
             return
 
         active_events = await self.config.guild(ctx.guild).active_events()
-        prices_text = self._build_prices_text(assets, active_events)
+        price_pages = self._build_prices_pages(assets, active_events)
         now = time.time()
         channel_key = str(ctx.channel.id)
         cache = await self.config.guild(ctx.guild).prices_cache()
@@ -1413,6 +1480,12 @@ class MarketTrade(commands.Cog):
         cached_message_id = int(cache_entry.get("message_id", 0))
         cached_ts = float(cache_entry.get("ts", 0.0))
 
+        if len(price_pages) > 1:
+            for page in price_pages:
+                await ctx.send(page)
+            return
+
+        prices_text = price_pages[0]
         reused_message = False
         if cached_message_id and (now - cached_ts) <= 300:
             try:
@@ -2496,10 +2569,10 @@ class MarketTrade(commands.Cog):
             return
 
         active_events = await self.config.guild(ctx.guild).active_events()
-        prices_text = self._build_prices_text(assets, active_events)
-        live_message = await ctx.send(prices_text)
+        price_pages = self._build_prices_pages(assets, active_events)
+        live_messages = await self._sync_live_price_pages(ctx.channel, price_pages)
         await self.config.guild(ctx.guild).live_prices_message.set(
-            {"channel_id": ctx.channel.id, "message_id": live_message.id}
+            {"channel_id": ctx.channel.id, "message_ids": [message.id for message in live_messages]}
         )
         await ctx.send("Live prices message created. I will update it every minute.")
 

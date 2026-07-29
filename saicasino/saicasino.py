@@ -205,8 +205,109 @@ class BlackjackGameView(discord.ui.View):
             return "Game in progress..."
 
 
+class CoinflipGameView(discord.ui.View):
+    """View for coinflip game buttons."""
+    
+    def __init__(self, game_data, timeout=60):
+        super().__init__(timeout=timeout)
+        self.game_data = game_data
+        self.game_over = False
+    
+    @discord.ui.button(label="Heads", style=discord.ButtonStyle.primary, emoji="🪙")
+    async def heads_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Player chooses heads."""
+        if interaction.user.id != self.game_data['player_id']:
+            await interaction.response.defer()
+            return
+        
+        self.game_data['player_choice'] = 'heads'
+        self._flip_coin()
+        
+        self.game_over = True
+        self.heads_button.disabled = True
+        self.tails_button.disabled = True
+        
+        embed = self._create_game_embed()
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+    
+    @discord.ui.button(label="Tails", style=discord.ButtonStyle.primary, emoji="🪙")
+    async def tails_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Player chooses tails."""
+        if interaction.user.id != self.game_data['player_id']:
+            await interaction.response.defer()
+            return
+        
+        self.game_data['player_choice'] = 'tails'
+        self._flip_coin()
+        
+        self.game_over = True
+        self.heads_button.disabled = True
+        self.tails_button.disabled = True
+        
+        embed = self._create_game_embed()
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+    
+    def _flip_coin(self):
+        """Flip the coin and determine outcome."""
+        self.game_data['coin_result'] = random.choice(['heads', 'tails'])
+        player_choice = self.game_data['player_choice']
+        
+        if player_choice == self.game_data['coin_result']:
+            self.game_data['status'] = 'win'
+        else:
+            self.game_data['status'] = 'lose'
+    
+    def _create_game_embed(self):
+        """Create the embed for the current game state."""
+        embed = discord.Embed(title="🪙 Coinflip 🪙", color=discord.Color.gold())
+        
+        # Coin result
+        result_emoji = "🟡" if self.game_data['coin_result'] == 'heads' else "⚫"
+        embed.add_field(
+            name="Coin Result",
+            value=f"{result_emoji} **{self.game_data['coin_result'].upper()}**",
+            inline=False
+        )
+        
+        # Player choice
+        player_choice = self.game_data['player_choice']
+        embed.add_field(
+            name="Your Choice",
+            value=f"**{player_choice.upper()}**",
+            inline=False
+        )
+        
+        # Bet amount
+        embed.add_field(
+            name="Bet",
+            value=f"💰 {humanize_number(self.game_data['bet'])} credits",
+            inline=False
+        )
+        
+        # Game status
+        status_msg = self._get_status_message()
+        embed.add_field(name="Result", value=status_msg, inline=False)
+        
+        return embed
+    
+    def _get_status_message(self):
+        """Get the status message based on game outcome."""
+        status = self.game_data['status']
+        bet = self.game_data['bet']
+        
+        if status == 'win':
+            winnings = bet * 2
+            return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
+        elif status == 'lose':
+            return f"❌ **You Lose!** Lost {humanize_number(bet)} credits."
+        else:
+            return "Waiting for your choice..."
+
+
 class SaiCasino(commands.Cog):
-    """A casino cog with blackjack games using Red bank credits."""
+    """A casino cog with blackjack and coinflip games using Red bank credits."""
     
     def __init__(self, bot):
         self.bot = bot
@@ -307,6 +408,81 @@ class SaiCasino(commands.Cog):
                 await bank.deposit_credits(ctx.author, winnings)
             elif game_data['status'] == 'push':
                 await bank.deposit_credits(ctx.author, bet)
+    
+    @commands.command()
+    @commands.guild_only()
+    async def coinflip(self, ctx, bet: int = None):
+        """
+        Play a game of coinflip!
+        
+        Usage: [p]coinflip <bet_amount>
+        
+        Bet your Red bank credits and choose heads or tails. 50/50 chance to win double!
+        """
+        if bet is None:
+            return await ctx.send("Please specify a bet amount. Example: `[p]coinflip 100`")
+        
+        if bet <= 0:
+            return await ctx.send("Bet amount must be greater than 0!")
+        
+        # Check if player has enough credits
+        balance = await bank.get_balance(ctx.author)
+        if not await bank.can_spend(ctx.author, bet):
+            return await ctx.send(
+                f"You don't have enough credits! Your balance: {humanize_number(balance)}"
+            )
+        
+        # Withdraw the bet
+        await bank.withdraw_credits(ctx.author, bet)
+        
+        # Initialize game
+        game_data = {
+            'player_id': ctx.author.id,
+            'bet': bet,
+            'player_choice': None,
+            'coin_result': None,
+            'status': 'waiting'
+        }
+        
+        # Create the game view and embed
+        view = CoinflipGameView(game_data)
+        
+        embed = view._create_game_embed()
+        # Update embed message for waiting state
+        embed = discord.Embed(title="🪙 Coinflip 🪙", color=discord.Color.gold())
+        embed.add_field(
+            name="Choose Your Side",
+            value="Pick **Heads** or **Tails** and the coin will flip!",
+            inline=False
+        )
+        embed.add_field(
+            name="Bet",
+            value=f"💰 {humanize_number(bet)} credits",
+            inline=False
+        )
+        embed.add_field(
+            name="Odds",
+            value="**50/50** chance to win double your bet!",
+            inline=False
+        )
+        
+        message = await ctx.send(embed=embed, view=view)
+        
+        # Wait for player choice
+        await view.wait()
+        
+        # Handle final winnings/losses
+        final_embed = view._create_game_embed()
+        try:
+            await message.edit(embed=final_embed)
+        except discord.HTTPException:
+            pass
+        
+        # Process final payouts
+        if game_data['status'] == 'win':
+            winnings = bet * 2
+            await bank.deposit_credits(ctx.author, winnings)
+        # If lost, bet was already withdrawn
 
 
 async def setup(bot):

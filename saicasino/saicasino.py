@@ -4,6 +4,65 @@ from redbot.core import commands, bank
 from redbot.core.utils.chat_formatting import humanize_number
 
 
+class OpponentAcceptView(discord.ui.View):
+    """View for accepting/declining a challenge."""
+    
+    def __init__(self, timeout=30):
+        super().__init__(timeout=timeout)
+        self.accepted = False
+    
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.green, emoji="✅")
+    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Accept the challenge."""
+        self.accepted = True
+        await interaction.response.defer()
+        self.stop()
+    
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.red, emoji="❌")
+    async def decline_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Decline the challenge."""
+        self.accepted = False
+        await interaction.response.defer()
+        self.stop()
+
+
+class GameModeSelect(discord.ui.View):
+    """View for selecting game mode (dealer vs player)."""
+    
+    def __init__(self, timeout=60):
+        super().__init__(timeout=timeout)
+        self.mode = None
+        self.opponent = None
+    
+    @discord.ui.button(label="Play Dealer", style=discord.ButtonStyle.primary, emoji="🤖")
+    async def dealer_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Player chooses to play against dealer."""
+        self.mode = 'dealer'
+        self.opponent = None
+        await interaction.response.defer()
+        self.stop()
+    
+    @discord.ui.button(label="Play Member", style=discord.ButtonStyle.secondary, emoji="👥")
+    async def member_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Player chooses to play against another member."""
+        self.mode = 'member'
+        await interaction.response.send_modal(OpponentModal())
+        self.stop()
+
+
+class OpponentModal(discord.ui.Modal, title="Select Opponent"):
+    """Modal for selecting an opponent member."""
+    
+    opponent_name = discord.ui.TextInput(
+        label="Opponent Username/ID",
+        placeholder="Enter username or mention",
+        required=True
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+
 class Deck:
     """Represents a deck of cards for blackjack."""
     
@@ -84,19 +143,28 @@ class BlackjackGameView(discord.ui.View):
     @discord.ui.button(label="Hit", style=discord.ButtonStyle.primary, emoji="🎴")
     async def hit_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Player hits - draws another card."""
-        if interaction.user.id != self.game_data['player_id']:
+        is_player = interaction.user.id == self.game_data['player_id']
+        is_opponent = self.game_data['opponent_id'] and interaction.user.id == self.game_data['opponent_id']
+        
+        if not (is_player or is_opponent):
             await interaction.response.defer()
             return
         
         # Draw card for player
-        self.game_data['player_hand'].add_card(self.game_data['deck'].draw())
-        
-        # Check if player busted
-        if self.game_data['player_hand'].get_value() > 21:
-            self.game_data['status'] = 'bust'
-            self.game_over = True
-            self.hit_button.disabled = True
-            self.stand_button.disabled = True
+        if is_player:
+            self.game_data['player_hand'].add_card(self.game_data['deck'].draw())
+            if self.game_data['player_hand'].get_value() > 21:
+                self.game_data['status'] = 'bust'
+                self.game_over = True
+                self.hit_button.disabled = True
+                self.stand_button.disabled = True
+        else:  # opponent
+            self.game_data['opponent_hand'].add_card(self.game_data['deck'].draw())
+            if self.game_data['opponent_hand'].get_value() > 21:
+                self.game_data['status'] = 'opponent_bust'
+                self.game_over = True
+                self.hit_button.disabled = True
+                self.stand_button.disabled = True
         
         embed = self._create_game_embed()
         await interaction.response.edit_message(embed=embed, view=self if not self.game_over else None)
@@ -105,39 +173,67 @@ class BlackjackGameView(discord.ui.View):
     
     @discord.ui.button(label="Stand", style=discord.ButtonStyle.success, emoji="🛑")
     async def stand_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Player stands - dealer's turn."""
-        if interaction.user.id != self.game_data['player_id']:
+        """Player stands - dealer's turn or opponent's final comparison."""
+        is_player = interaction.user.id == self.game_data['player_id']
+        is_opponent = self.game_data['opponent_id'] and interaction.user.id == self.game_data['opponent_id']
+        
+        if not (is_player or is_opponent):
             await interaction.response.defer()
             return
         
-        # Dealer plays
-        self.game_data['status'] = 'dealer_playing'
-        dealer_hand = self.game_data['dealer_hand']
-        
-        # Dealer hits on 16 or less, stands on 17 or more
-        while dealer_hand.get_value() < 17:
-            dealer_hand.add_card(self.game_data['deck'].draw())
-        
-        # Determine winner
-        player_value = self.game_data['player_hand'].get_value()
-        dealer_value = dealer_hand.get_value()
-        
-        if dealer_value > 21:
-            self.game_data['status'] = 'dealer_bust'
-        elif player_value > dealer_value:
-            self.game_data['status'] = 'player_win'
-        elif dealer_value > player_value:
-            self.game_data['status'] = 'dealer_win'
+        if self.game_data['mode'] == 'pvp':
+            # PVP mode - mark player as stood
+            if is_player:
+                self.game_data['player_stood'] = True
+            else:
+                self.game_data['opponent_stood'] = True
+            
+            # Check if both have stood
+            if self.game_data.get('player_stood') and self.game_data.get('opponent_stood'):
+                # Both stood - compare hands
+                player_value = self.game_data['player_hand'].get_value()
+                opponent_value = self.game_data['opponent_hand'].get_value()
+                
+                if player_value > opponent_value:
+                    self.game_data['status'] = 'player_win'
+                elif opponent_value > player_value:
+                    self.game_data['status'] = 'opponent_win'
+                else:
+                    self.game_data['status'] = 'push'
+                
+                self.game_over = True
+                self.hit_button.disabled = True
+                self.stand_button.disabled = True
         else:
-            self.game_data['status'] = 'push'
-        
-        self.game_over = True
-        self.hit_button.disabled = True
-        self.stand_button.disabled = True
+            # Dealer mode
+            self.game_data['status'] = 'dealer_playing'
+            dealer_hand = self.game_data['dealer_hand']
+            
+            # Dealer hits on 16 or less, stands on 17 or more
+            while dealer_hand.get_value() < 17:
+                dealer_hand.add_card(self.game_data['deck'].draw())
+            
+            # Determine winner
+            player_value = self.game_data['player_hand'].get_value()
+            dealer_value = dealer_hand.get_value()
+            
+            if dealer_value > 21:
+                self.game_data['status'] = 'dealer_bust'
+            elif player_value > dealer_value:
+                self.game_data['status'] = 'player_win'
+            elif dealer_value > player_value:
+                self.game_data['status'] = 'dealer_win'
+            else:
+                self.game_data['status'] = 'push'
+            
+            self.game_over = True
+            self.hit_button.disabled = True
+            self.stand_button.disabled = True
         
         embed = self._create_game_embed()
-        await interaction.response.edit_message(embed=embed, view=None)
-        self.stop()
+        await interaction.response.edit_message(embed=embed, view=self if not self.game_over else None)
+        if self.game_over:
+            self.stop()
     
     def _create_game_embed(self):
         """Create the embed for the current game state."""
@@ -151,25 +247,35 @@ class BlackjackGameView(discord.ui.View):
             inline=False
         )
         
-        # Dealer hand
-        dealer_hand = self.game_data['dealer_hand']
-        if self.game_over:
-            dealer_display = dealer_hand.get_hand_string()
+        if self.game_data['mode'] == 'pvp':
+            # PVP mode - show opponent's hand
+            opponent = self.game_data['opponent']
+            opponent_hand = self.game_data['opponent_hand']
+            embed.add_field(
+                name=f"{opponent.name}'s Hand ({opponent_hand.get_value()})",
+                value=opponent_hand.get_hand_string(),
+                inline=False
+            )
         else:
-            # Hide dealer's second card
-            visible_cards = [Deck.card_to_string(dealer_hand.cards[0]), "?"]
-            dealer_display = ' '.join(visible_cards)
-        
-        embed.add_field(
-            name="Dealer's Hand",
-            value=dealer_display,
-            inline=False
-        )
+            # Dealer mode - show dealer's hand
+            dealer_hand = self.game_data['dealer_hand']
+            if self.game_over:
+                dealer_display = dealer_hand.get_hand_string()
+            else:
+                # Hide dealer's second card
+                visible_cards = [Deck.card_to_string(dealer_hand.cards[0]), "?"]
+                dealer_display = ' '.join(visible_cards)
+            
+            embed.add_field(
+                name="Dealer's Hand",
+                value=dealer_display,
+                inline=False
+            )
         
         # Bet amount
         embed.add_field(
             name="Bet",
-            value=f"💰 {humanize_number(self.game_data['bet'])} credits",
+            value=f"💰 {humanize_number(self.game_data['bet'])} credits per player",
             inline=False
         )
         
@@ -183,26 +289,50 @@ class BlackjackGameView(discord.ui.View):
         """Get the status message based on game state."""
         status = self.game_data['status']
         bet = self.game_data['bet']
+        mode = self.game_data['mode']
         
-        if status == 'playing':
-            return "Your turn - Hit or Stand?"
-        elif status == 'bust':
-            return f"❌ **Bust!** You went over 21. Lost {humanize_number(bet)} credits."
-        elif status == 'dealer_bust':
-            winnings = bet * 2
-            return f"✅ **Dealer Bust!** You win {humanize_number(winnings)} credits!"
-        elif status == 'player_blackjack':
-            winnings = int(bet * 2.5)
-            return f"✅ **Blackjack!** You win {humanize_number(winnings)} credits!"
-        elif status == 'player_win':
-            winnings = bet * 2
-            return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
-        elif status == 'dealer_win':
-            return f"❌ **Dealer Wins!** Lost {humanize_number(bet)} credits."
-        elif status == 'push':
-            return f"🤝 **Push!** Your bet of {humanize_number(bet)} credits is returned."
+        if mode == 'pvp':
+            # PVP messages
+            if status == 'playing':
+                return "Players' turn - Hit or Stand?"
+            elif status == 'bust':
+                return f"❌ **Bust!** You went over 21. Lost {humanize_number(bet)} credits."
+            elif status == 'opponent_bust':
+                winnings = bet * 2
+                return f"✅ **Opponent Bust!** You win {humanize_number(winnings)} credits!"
+            elif status == 'player_blackjack':
+                winnings = int(bet * 2.5)
+                return f"✅ **Blackjack!** You win {humanize_number(winnings)} credits!"
+            elif status == 'opponent_blackjack':
+                return f"❌ **Opponent has Blackjack!** Lost {humanize_number(bet)} credits."
+            elif status == 'player_win':
+                winnings = bet * 2
+                return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
+            elif status == 'opponent_win':
+                return f"❌ **Opponent Wins!** Lost {humanize_number(bet)} credits."
+            elif status == 'push':
+                return f"🤝 **Push!** Your bet of {humanize_number(bet)} credits is returned."
         else:
-            return "Game in progress..."
+            # Dealer mode messages
+            if status == 'playing':
+                return "Your turn - Hit or Stand?"
+            elif status == 'bust':
+                return f"❌ **Bust!** You went over 21. Lost {humanize_number(bet)} credits."
+            elif status == 'dealer_bust':
+                winnings = bet * 2
+                return f"✅ **Dealer Bust!** You win {humanize_number(winnings)} credits!"
+            elif status == 'player_blackjack':
+                winnings = int(bet * 2.5)
+                return f"✅ **Blackjack!** You win {humanize_number(winnings)} credits!"
+            elif status == 'player_win':
+                winnings = bet * 2
+                return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
+            elif status == 'dealer_win':
+                return f"❌ **Dealer Wins!** Lost {humanize_number(bet)} credits."
+            elif status == 'push':
+                return f"🤝 **Push!** Your bet of {humanize_number(bet)} credits is returned."
+        
+        return "Game in progress..."
 
 
 class CoinflipGameView(discord.ui.View):
@@ -216,48 +346,87 @@ class CoinflipGameView(discord.ui.View):
     @discord.ui.button(label="Heads", style=discord.ButtonStyle.primary, emoji="🪙")
     async def heads_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Player chooses heads."""
-        if interaction.user.id != self.game_data['player_id']:
+        is_player = interaction.user.id == self.game_data['player_id']
+        is_opponent = self.game_data['opponent_id'] and interaction.user.id == self.game_data['opponent_id']
+        
+        if not (is_player or is_opponent):
             await interaction.response.defer()
             return
         
-        self.game_data['player_choice'] = 'heads'
-        self._flip_coin()
+        if is_player:
+            self.game_data['player_choice'] = 'heads'
+        else:
+            self.game_data['opponent_choice'] = 'heads'
         
-        self.game_over = True
-        self.heads_button.disabled = True
-        self.tails_button.disabled = True
-        
-        embed = self._create_game_embed()
-        await interaction.response.edit_message(embed=embed, view=None)
-        self.stop()
+        # Check if both players have chosen (if PVP) or just one (if dealer mode)
+        if self._all_choices_made():
+            self._flip_coin()
+            self.game_over = True
+            self.heads_button.disabled = True
+            self.tails_button.disabled = True
+            embed = self._create_game_embed()
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+        else:
+            await interaction.response.defer()
     
     @discord.ui.button(label="Tails", style=discord.ButtonStyle.primary, emoji="🪙")
     async def tails_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Player chooses tails."""
-        if interaction.user.id != self.game_data['player_id']:
+        is_player = interaction.user.id == self.game_data['player_id']
+        is_opponent = self.game_data['opponent_id'] and interaction.user.id == self.game_data['opponent_id']
+        
+        if not (is_player or is_opponent):
             await interaction.response.defer()
             return
         
-        self.game_data['player_choice'] = 'tails'
-        self._flip_coin()
+        if is_player:
+            self.game_data['player_choice'] = 'tails'
+        else:
+            self.game_data['opponent_choice'] = 'tails'
         
-        self.game_over = True
-        self.heads_button.disabled = True
-        self.tails_button.disabled = True
-        
-        embed = self._create_game_embed()
-        await interaction.response.edit_message(embed=embed, view=None)
-        self.stop()
+        # Check if both players have chosen (if PVP) or just one (if dealer mode)
+        if self._all_choices_made():
+            self._flip_coin()
+            self.game_over = True
+            self.heads_button.disabled = True
+            self.tails_button.disabled = True
+            embed = self._create_game_embed()
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+        else:
+            await interaction.response.defer()
+    
+    def _all_choices_made(self):
+        """Check if all necessary choices have been made."""
+        if self.game_data['mode'] == 'pvp':
+            return self.game_data['player_choice'] is not None and self.game_data['opponent_choice'] is not None
+        else:
+            return self.game_data['player_choice'] is not None
     
     def _flip_coin(self):
         """Flip the coin and determine outcome."""
         self.game_data['coin_result'] = random.choice(['heads', 'tails'])
-        player_choice = self.game_data['player_choice']
         
-        if player_choice == self.game_data['coin_result']:
-            self.game_data['status'] = 'win'
+        if self.game_data['mode'] == 'pvp':
+            # PVP mode - compare both players' choices
+            player_match = self.game_data['player_choice'] == self.game_data['coin_result']
+            opponent_match = self.game_data['opponent_choice'] == self.game_data['coin_result']
+            
+            if player_match and opponent_match:
+                self.game_data['status'] = 'push'
+            elif player_match:
+                self.game_data['status'] = 'player_win'
+            elif opponent_match:
+                self.game_data['status'] = 'opponent_win'
+            else:
+                self.game_data['status'] = 'both_lose'
         else:
-            self.game_data['status'] = 'lose'
+            # Dealer mode
+            if self.game_data['player_choice'] == self.game_data['coin_result']:
+                self.game_data['status'] = 'win'
+            else:
+                self.game_data['status'] = 'lose'
     
     def _create_game_embed(self):
         """Create the embed for the current game state."""
@@ -271,13 +440,30 @@ class CoinflipGameView(discord.ui.View):
             inline=False
         )
         
-        # Player choice
-        player_choice = self.game_data['player_choice']
-        embed.add_field(
-            name="Your Choice",
-            value=f"**{player_choice.upper()}**",
-            inline=False
-        )
+        if self.game_data['mode'] == 'pvp':
+            # PVP mode - show both choices
+            player_choice = self.game_data['player_choice']
+            opponent_choice = self.game_data['opponent_choice']
+            opponent = self.game_data['opponent']
+            
+            embed.add_field(
+                name="Your Choice",
+                value=f"**{player_choice.upper() if player_choice else '?'}**",
+                inline=True
+            )
+            embed.add_field(
+                name=f"{opponent.name}'s Choice",
+                value=f"**{opponent_choice.upper() if opponent_choice else '?'}**",
+                inline=True
+            )
+        else:
+            # Dealer mode - show only player choice
+            player_choice = self.game_data['player_choice']
+            embed.add_field(
+                name="Your Choice",
+                value=f"**{player_choice.upper() if player_choice else '?'}**",
+                inline=False
+            )
         
         # Bet amount
         embed.add_field(
@@ -297,13 +483,30 @@ class CoinflipGameView(discord.ui.View):
         status = self.game_data['status']
         bet = self.game_data['bet']
         
-        if status == 'win':
-            winnings = bet * 2
-            return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
-        elif status == 'lose':
-            return f"❌ **You Lose!** Lost {humanize_number(bet)} credits."
+        if self.game_data['mode'] == 'pvp':
+            # PVP messages
+            if status == 'waiting':
+                return "Waiting for players' choices..."
+            elif status == 'player_win':
+                winnings = bet * 2
+                return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
+            elif status == 'opponent_win':
+                return f"❌ **Opponent Wins!** Lost {humanize_number(bet)} credits."
+            elif status == 'push':
+                return f"🤝 **Push!** Both matched the coin. Your bet of {humanize_number(bet)} credits is returned."
+            elif status == 'both_lose':
+                return f"❌ **Both Lose!** Neither matched. Bets kept."
         else:
-            return "Waiting for your choice..."
+            # Dealer mode messages
+            if status == 'waiting':
+                return "Waiting for your choice..."
+            elif status == 'win':
+                winnings = bet * 2
+                return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
+            elif status == 'lose':
+                return f"❌ **You Lose!** Lost {humanize_number(bet)} credits."
+        
+        return "Game in progress..."
 
 
 class SaiCasino(commands.Cog):
@@ -314,62 +517,106 @@ class SaiCasino(commands.Cog):
     
     @commands.command()
     @commands.guild_only()
-    async def blackjack(self, ctx, bet: int = None):
+    async def blackjack(self, ctx, bet: int = None, opponent: discord.Member = None):
         """
         Play a game of blackjack!
         
-        Usage: [p]blackjack <bet_amount>
+        Usage: [p]blackjack <bet_amount> [opponent]
         
         Bet your Red bank credits and try to get 21 or closer to the dealer's hand
-        without going over!
+        without going over! Optionally play against another member.
         """
         if bet is None:
             return await ctx.send("Please specify a bet amount. Example: `[p]blackjack 100`")
         
+        if opponent and opponent.bot:
+            return await ctx.send("You can't play against a bot!")
+        
+        if opponent and opponent == ctx.author:
+            return await ctx.send("You can't play against yourself!")
+        
         if bet <= 0:
             return await ctx.send("Bet amount must be greater than 0!")
         
-        # Check if player has enough credits
+        # Check if both players have enough credits
         balance = await bank.get_balance(ctx.author)
         if not await bank.can_spend(ctx.author, bet):
             return await ctx.send(
                 f"You don't have enough credits! Your balance: {humanize_number(balance)}"
             )
         
-        # Withdraw the bet
+        if opponent:
+            opponent_balance = await bank.get_balance(opponent)
+            if not await bank.can_spend(opponent, bet):
+                return await ctx.send(
+                    f"{opponent.mention} doesn't have enough credits! Their balance: {humanize_number(opponent_balance)}"
+                )
+            
+            # Ask opponent to accept
+            accept_view = OpponentAcceptView(timeout=30)
+            msg = await ctx.send(f"{opponent.mention}, {ctx.author.mention} challenges you to blackjack for {humanize_number(bet)} credits! Accept?", view=accept_view)
+            await accept_view.wait()
+            
+            if not accept_view.accepted:
+                return await msg.edit(content=f"❌ {opponent.mention} declined the challenge!", view=None)
+        
+        # Withdraw bets
         await bank.withdraw_credits(ctx.author, bet)
+        if opponent:
+            await bank.withdraw_credits(opponent, bet)
         
         # Initialize game
         deck = Deck()
         player_hand = Hand()
-        dealer_hand = Hand()
+        opponent_hand = Hand() if opponent else None
+        dealer_hand = Hand() if not opponent else None
         
         # Deal initial cards
         player_hand.add_card(deck.draw())
-        dealer_hand.add_card(deck.draw())
-        player_hand.add_card(deck.draw())
-        dealer_hand.add_card(deck.draw())
+        if opponent:
+            opponent_hand.add_card(deck.draw())
+            player_hand.add_card(deck.draw())
+            opponent_hand.add_card(deck.draw())
+        else:
+            dealer_hand.add_card(deck.draw())
+            player_hand.add_card(deck.draw())
+            dealer_hand.add_card(deck.draw())
         
         # Check for blackjacks
         player_blackjack = player_hand.is_blackjack()
-        dealer_blackjack = dealer_hand.is_blackjack()
+        opponent_blackjack = opponent_hand.is_blackjack() if opponent else None
+        dealer_blackjack = dealer_hand.is_blackjack() if not opponent else None
         
         game_data = {
             'player_id': ctx.author.id,
+            'opponent_id': opponent.id if opponent else None,
+            'opponent': opponent,
             'deck': deck,
             'player_hand': player_hand,
+            'opponent_hand': opponent_hand,
             'dealer_hand': dealer_hand,
             'bet': bet,
-            'status': 'playing'
+            'status': 'playing',
+            'mode': 'pvp' if opponent else 'dealer'
         }
         
         # Determine if there's a natural blackjack situation
-        if player_blackjack and dealer_blackjack:
-            game_data['status'] = 'push'
-        elif player_blackjack:
-            game_data['status'] = 'player_blackjack'
-        elif dealer_blackjack:
-            game_data['status'] = 'dealer_win'
+        if opponent:
+            # PVP mode
+            if player_blackjack and opponent_blackjack:
+                game_data['status'] = 'push'
+            elif player_blackjack and not opponent_blackjack:
+                game_data['status'] = 'player_blackjack'
+            elif opponent_blackjack and not player_blackjack:
+                game_data['status'] = 'opponent_blackjack'
+        else:
+            # Dealer mode
+            if player_blackjack and dealer_blackjack:
+                game_data['status'] = 'push'
+            elif player_blackjack:
+                game_data['status'] = 'player_blackjack'
+            elif dealer_blackjack:
+                game_data['status'] = 'dealer_win'
         
         # Create the game view and embed
         view = BlackjackGameView(game_data)
@@ -400,48 +647,99 @@ class SaiCasino(commands.Cog):
                 pass
             
             # Process final payouts
-            if game_data['status'] in ['dealer_bust', 'player_win']:
-                winnings = int(bet * 2)
-                await bank.deposit_credits(ctx.author, winnings)
-            elif game_data['status'] == 'player_blackjack':
-                winnings = int(bet * 2.5)
-                await bank.deposit_credits(ctx.author, winnings)
-            elif game_data['status'] == 'push':
-                await bank.deposit_credits(ctx.author, bet)
+            if game_data['mode'] == 'pvp':
+                # PVP payouts
+                if game_data['status'] in ['opponent_bust', 'player_win']:
+                    winnings = int(bet * 2)
+                    await bank.deposit_credits(ctx.author, winnings)
+                    await bank.deposit_credits(opponent, 0)  # Opponent loses
+                elif game_data['status'] == 'player_blackjack':
+                    winnings = int(bet * 2.5)
+                    await bank.deposit_credits(ctx.author, winnings)
+                elif game_data['status'] == 'opponent_blackjack':
+                    winnings = int(bet * 2.5)
+                    await bank.deposit_credits(opponent, winnings)
+                elif game_data['status'] == 'opponent_win':
+                    winnings = int(bet * 2)
+                    await bank.deposit_credits(opponent, winnings)
+                elif game_data['status'] == 'push':
+                    await bank.deposit_credits(ctx.author, bet)
+                    await bank.deposit_credits(opponent, bet)
+                elif game_data['status'] == 'bust':
+                    # Player busted, opponent gets winnings
+                    await bank.deposit_credits(opponent, bet * 2)
+            else:
+                # Dealer mode payouts
+                if game_data['status'] in ['dealer_bust', 'player_win']:
+                    winnings = int(bet * 2)
+                    await bank.deposit_credits(ctx.author, winnings)
+                elif game_data['status'] == 'player_blackjack':
+                    winnings = int(bet * 2.5)
+                    await bank.deposit_credits(ctx.author, winnings)
+                elif game_data['status'] == 'push':
+                    await bank.deposit_credits(ctx.author, bet)
     
     @commands.command()
     @commands.guild_only()
-    async def coinflip(self, ctx, bet: int = None):
+    async def coinflip(self, ctx, bet: int = None, opponent: discord.Member = None):
         """
         Play a game of coinflip!
         
-        Usage: [p]coinflip <bet_amount>
+        Usage: [p]coinflip <bet_amount> [opponent]
         
         Bet your Red bank credits and choose heads or tails. 50/50 chance to win double!
+        Optionally play against another member.
         """
         if bet is None:
             return await ctx.send("Please specify a bet amount. Example: `[p]coinflip 100`")
         
+        if opponent and opponent.bot:
+            return await ctx.send("You can't play against a bot!")
+        
+        if opponent and opponent == ctx.author:
+            return await ctx.send("You can't play against yourself!")
+        
         if bet <= 0:
             return await ctx.send("Bet amount must be greater than 0!")
         
-        # Check if player has enough credits
+        # Check if both players have enough credits
         balance = await bank.get_balance(ctx.author)
         if not await bank.can_spend(ctx.author, bet):
             return await ctx.send(
                 f"You don't have enough credits! Your balance: {humanize_number(balance)}"
             )
         
-        # Withdraw the bet
+        if opponent:
+            opponent_balance = await bank.get_balance(opponent)
+            if not await bank.can_spend(opponent, bet):
+                return await ctx.send(
+                    f"{opponent.mention} doesn't have enough credits! Their balance: {humanize_number(opponent_balance)}"
+                )
+            
+            # Ask opponent to accept
+            accept_view = OpponentAcceptView(timeout=30)
+            msg = await ctx.send(f"{opponent.mention}, {ctx.author.mention} challenges you to coinflip for {humanize_number(bet)} credits! Accept?", view=accept_view)
+            await accept_view.wait()
+            
+            if not accept_view.accepted:
+                return await msg.edit(content=f"❌ {opponent.mention} declined the challenge!", view=None)
+        
+        # Withdraw bets
         await bank.withdraw_credits(ctx.author, bet)
+        if opponent:
+            await bank.withdraw_credits(opponent, bet)
         
         # Initialize game
         game_data = {
             'player_id': ctx.author.id,
+            'opponent_id': opponent.id if opponent else None,
+            'opponent': opponent,
             'bet': bet,
             'player_choice': None,
+            'opponent_choice': None,
             'coin_result': None,
-            'status': 'waiting'
+            'status': 'waiting',
+            'mode': 'pvp' if opponent else 'dealer'
         }
         
         # Create the game view and embed
@@ -449,11 +747,18 @@ class SaiCasino(commands.Cog):
         
         # Create initial waiting embed
         embed = discord.Embed(title="🪙 Coinflip 🪙", color=discord.Color.gold())
-        embed.add_field(
-            name="Choose Your Side",
-            value="Pick **Heads** or **Tails** and the coin will flip!",
-            inline=False
-        )
+        if opponent:
+            embed.add_field(
+                name="Choose Your Side",
+                value=f"{ctx.author.mention} and {opponent.mention}\nPick **Heads** or **Tails** and let's flip!",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Choose Your Side",
+                value="Pick **Heads** or **Tails** and the coin will flip!",
+                inline=False
+            )
         embed.add_field(
             name="Bet",
             value=f"💰 {humanize_number(bet)} credits",
@@ -478,10 +783,25 @@ class SaiCasino(commands.Cog):
             pass
         
         # Process final payouts
-        if game_data['status'] == 'win':
-            winnings = bet * 2
-            await bank.deposit_credits(ctx.author, winnings)
-        # If lost, bet was already withdrawn
+        if game_data['mode'] == 'pvp':
+            # PVP payouts
+            if game_data['status'] == 'player_win':
+                winnings = bet * 2
+                await bank.deposit_credits(ctx.author, winnings)
+            elif game_data['status'] == 'opponent_win':
+                winnings = bet * 2
+                await bank.deposit_credits(opponent, winnings)
+            elif game_data['status'] == 'push':
+                # Both matched - return both bets
+                await bank.deposit_credits(ctx.author, bet)
+                await bank.deposit_credits(opponent, bet)
+            # If both_lose, neither gets credits (both bets are kept)
+        else:
+            # Dealer mode payouts
+            if game_data['status'] == 'win':
+                winnings = bet * 2
+                await bank.deposit_credits(ctx.author, winnings)
+            # If lost, bet was already withdrawn
 
 
 async def setup(bot):

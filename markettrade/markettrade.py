@@ -1221,16 +1221,10 @@ class MarketTrade(commands.Cog):
 
     @market.command(name="help", aliases=["commands", "cmds"])
     async def market_help(self, ctx):
-       """Show all market trading commands."""
-       can_view_admin = False
-       try:
-          can_view_admin = await self.market_admin.can_run(ctx)
-       except commands.CommandError:
-          can_view_admin = False
-
+       """Show market trading commands for regular users."""
        embed = discord.Embed(
            title="Market Trading Commands",
-           description="Complete list of all market trading commands",
+           description="Complete list of market trading commands available to you",
            color=discord.Color.green()
        )
        embed.add_field(
@@ -1272,63 +1266,113 @@ class MarketTrade(commands.Cog):
            inline=False
        )
 
-       if can_view_admin:
-           # Asset Management (Admin)
-           embed.add_field(
-               name="**Asset Management** (Admin)",
-               value="`asset add <symbol> <kind> <price> <name>` - Add tradable asset\n"
-                     "`asset list` - List all assets\n"
-                     "`asset info <symbol>` - Show asset details & profile\n"
-                     "`asset setprice <symbol> <price>` - Set asset price\n"
-                     "`asset setminprice <symbol> <price>` - Set minimum price\n"
-                     "`asset setmaxprice <symbol> <price>` - Set maximum price\n"
-                     "`asset setalllimits <min> <max>` - Set min/max for all assets",
-               inline=False
-           )
+       embed.set_footer(text="Admins: Use `[p]mt helpadmin` for admin commands | Use `[p]market <command> help` for more info")
+       await ctx.send(embed=embed)
 
-           # Behavior Profiles (Admin)
-           embed.add_field(
-               name="**Behavior Profiles** (Admin)",
-               value="`asset setprofile <symbol> <profile>` - Set behavior profile\n"
-                     "`asset profiles` - List available profiles\n"
-                     "`cycle info <symbol>` - Show current cycle profile and next shift\n"
-                     "`cycle announce <true|false>` - Toggle profile change announcements\n"
-                     "`cycle history [limit]` - Show recent profile changes\n"
-                     "`cycle clearhistory` - Clear profile change history\n"
-                    "Profiles: `stable`, `uptrend`, `downtrend`, `swing`, `wild`, `bullrun`, `crash`, `recovery`, `flat`",
-               inline=False
-           )
+    @market.command(name="helpadmin")
+    @commands.admin_or_permissions(manage_guild=True)
+    async def market_helpadmin(self, ctx):
+       """Show all market trading commands including admin-only commands."""
+       embed = discord.Embed(
+           title="Market Trading Commands (Admin Panel)",
+           description="Complete list of all market trading commands",
+           color=discord.Color.gold()
+       )
+       embed.add_field(
+           name="**Aliases**",
+           value="`market|mt`, `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`,\n"
+                 "`top|leaderboard|lb`, `autobuy|ab`, `autosell|as`, `set|create|add`, `list|ls`, `remove|rm|del`",
+           inline=False
+       )
 
-           # Price Control (Admin)
-           embed.add_field(
-               name="**Price Control** (Admin)",
-               value="`setdrift <value>` - Set baseline price change (-0.2 to 0.2)\n"
-                     "`setbullbias <value>` - Set uptrend preference (-0.4 to 0.4)\n"
-                     "`fees show` - Show configured trading fees\n"
-                     "`fees buy <percent>` - Set buy fee percent\n"
-                     "`fees sell <percent>` - Set sell fee percent\n"
-                     "`limits show` - Show configured trade limits\n"
-                     "`limits value <credits>` - Set daily traded value limit (0 = unlimited)\n"
-                     "`limits usage [member]` - Show daily usage counters\n"
-                     "`limits trades <count>` - Set daily trade count limit (0 = unlimited)\n"
-                     "`limits reset <member>` - Reset a member usage counters\n"
-                     "`tick` - Manually trigger 1 price update\n"
-                     "`ticks <count>` - Run many price updates at once (testing)",
-               inline=False
-           )
+       # Trading Commands
+       embed.add_field(
+           name="**Trading**",
+           value="`buy <symbol> <qty>` - Buy an asset with credits\n"
+                 "`sell <symbol> <qty|all>` - Sell asset or everything\n"
+                 "`portfolio [member]` - View holdings and value\n"
+                 "`top profit [limit]` - Top player profit leaderboard\n"
+                 "`top value [limit]` - Top player portfolio value leaderboard\n"
+                 "`prices` - Show current asset prices\n"
+                 "`graph <symbol> [window]` - Show price graph (`30m`, `6h`, max `24h`)",
+           inline=False
+       )
 
-           # Market Events (Admin)
-           embed.add_field(
-               name="**Market Events** (Admin)",
-               value="`event list` - List active events\n"
-                     "`event start <symbol> <percent> <ticks>` - Start event\n"
-                     "`event clear [symbol]` - Clear event(s)\n"
-                     "`event random <enabled>` - Enable/disable random events\n"
-                     "`event chance <percent>` - Set random event chance\n"
-                     "`event channel [#channel]` - Show/set announcement channel\n"
-                     "`event clearchannel` - Clear announcement channel",
-               inline=False
-           )
+       # Auto-Orders
+       embed.add_field(
+           name="**Auto-Buy Orders**",
+           value="`autobuy set <symbol> <price> <qty>` - Buy when price drops\n"
+                 "`autobuy list` - List your auto-buy orders\n"
+                 "(order setup requires ✅/❌ confirmation)\n"
+                 "`autobuy remove <symbol>` - Remove auto-buy orders",
+           inline=False
+       )
+
+       embed.add_field(
+           name="**Auto-Sell Orders**",
+           value="`autosell set <symbol> <price> <qty|all>` - Sell when price rises\n"
+                 "`autosell list` - List your auto-sell orders\n"
+                 "(order setup requires ✅/❌ confirmation)\n"
+                 "`autosell remove <symbol>` - Remove auto-sell orders",
+           inline=False
+       )
+
+       # Asset Management (Admin)
+       embed.add_field(
+           name="**Asset Management** (Admin)",
+           value="`asset add <symbol> <kind> <price> <name>` - Add tradable asset\n"
+                 "`asset list` - List all assets\n"
+                 "`asset info <symbol>` - Show asset details & profile\n"
+                 "`asset setprice <symbol> <price>` - Set asset price\n"
+                 "`asset setminprice <symbol> <price>` - Set minimum price\n"
+                 "`asset setmaxprice <symbol> <price>` - Set maximum price\n"
+                 "`asset setalllimits <min> <max>` - Set min/max for all assets",
+           inline=False
+       )
+
+       # Behavior Profiles (Admin)
+       embed.add_field(
+           name="**Behavior Profiles** (Admin)",
+           value="`asset setprofile <symbol> <profile>` - Set behavior profile\n"
+                 "`asset profiles` - List available profiles\n"
+                 "`cycle info <symbol>` - Show current cycle profile and next shift\n"
+                 "`cycle announce <true|false>` - Toggle profile change announcements\n"
+                 "`cycle history [limit]` - Show recent profile changes\n"
+                 "`cycle clearhistory` - Clear profile change history\n"
+                 "Profiles: `stable`, `uptrend`, `downtrend`, `swing`, `wild`, `bullrun`, `crash`, `recovery`, `flat`",
+           inline=False
+       )
+
+       # Price Control (Admin)
+       embed.add_field(
+           name="**Price Control** (Admin)",
+           value="`setdrift <value>` - Set baseline price change (-0.2 to 0.2)\n"
+                 "`setbullbias <value>` - Set uptrend preference (-0.4 to 0.4)\n"
+                 "`fees show` - Show configured trading fees\n"
+                 "`fees buy <percent>` - Set buy fee percent\n"
+                 "`fees sell <percent>` - Set sell fee percent\n"
+                 "`limits show` - Show configured trade limits\n"
+                 "`limits value <credits>` - Set daily traded value limit (0 = unlimited)\n"
+                 "`limits usage [member]` - Show daily usage counters\n"
+                 "`limits trades <count>` - Set daily trade count limit (0 = unlimited)\n"
+                 "`limits reset <member>` - Reset a member usage counters\n"
+                 "`tick` - Manually trigger 1 price update\n"
+                 "`ticks <count>` - Run many price updates at once (testing)",
+           inline=False
+       )
+
+       # Market Events (Admin)
+       embed.add_field(
+           name="**Market Events** (Admin)",
+           value="`event list` - List active events\n"
+                 "`event start <symbol> <percent> <ticks>` - Start event\n"
+                 "`event clear [symbol]` - Clear event(s)\n"
+                 "`event random <enabled>` - Enable/disable random events\n"
+                 "`event chance <percent>` - Set random event chance\n"
+                 "`event channel [#channel]` - Show/set announcement channel\n"
+                 "`event clearchannel` - Clear announcement channel",
+           inline=False
+       )
 
        embed.set_footer(text="Use [p]market <command> help for more info on any command")
        await ctx.send(embed=embed)

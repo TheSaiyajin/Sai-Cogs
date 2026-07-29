@@ -1,4 +1,5 @@
 import random
+import asyncio
 import discord
 from redbot.core import commands, bank
 from redbot.core.utils.chat_formatting import humanize_number
@@ -678,6 +679,16 @@ class SaiCasino(commands.Cog):
                     await bank.deposit_credits(ctx.author, winnings)
                 elif game_data['status'] == 'push':
                     await bank.deposit_credits(ctx.author, bet)
+        
+        # Schedule message deletion after 2 minutes
+        async def delete_message():
+            await asyncio.sleep(120)
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
+        
+        asyncio.create_task(delete_message())
     
     @commands.command()
     @commands.guild_only()
@@ -802,6 +813,16 @@ class SaiCasino(commands.Cog):
                 winnings = bet * 2
                 await bank.deposit_credits(ctx.author, winnings)
             # If lost, bet was already withdrawn
+        
+        # Schedule message deletion after 2 minutes
+        async def delete_message():
+            await asyncio.sleep(120)
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
+        
+        asyncio.create_task(delete_message())
 
 
 async def setup(bot):

@@ -11,11 +11,13 @@ class OpponentAcceptView(discord.ui.View):
     def __init__(self, timeout=30):
         super().__init__(timeout=timeout)
         self.accepted = False
+        self.timed_out = False
     
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.green, emoji="✅")
     async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Accept the challenge."""
         self.accepted = True
+        self.timed_out = False
         await interaction.response.defer()
         self.stop()
     
@@ -23,8 +25,14 @@ class OpponentAcceptView(discord.ui.View):
     async def decline_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Decline the challenge."""
         self.accepted = False
+        self.timed_out = False
         await interaction.response.defer()
         self.stop()
+    
+    async def on_timeout(self):
+        """Called when view times out."""
+        self.accepted = False
+        self.timed_out = True
 
 
 class GameModeSelect(discord.ui.View):
@@ -522,6 +530,132 @@ class SaiCasino(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
+    async def _get_player_result_embed(self, player, opponent, game_data, perspective):
+        """Generate a personalized result embed from a player's perspective."""
+        status = game_data['status']
+        bet = game_data['bet']
+        
+        if perspective == 'player':
+            player_hand = game_data['player_hand']
+            opponent_hand = game_data['opponent_hand']
+            viewer = player
+            other = opponent
+        else:  # opponent perspective
+            player_hand = game_data['opponent_hand']
+            opponent_hand = game_data['player_hand']
+            viewer = opponent
+            other = player
+        
+        embed = discord.Embed(title="♠ Blackjack Result ♠", color=discord.Color.green())
+        
+        # Your hand
+        embed.add_field(
+            name=f"Your Hand ({player_hand.get_value()})",
+            value=player_hand.get_hand_string(),
+            inline=False
+        )
+        
+        # Opponent's hand
+        embed.add_field(
+            name=f"{other.name}'s Hand ({opponent_hand.get_value()})",
+            value=opponent_hand.get_hand_string(),
+            inline=False
+        )
+        
+        # Result message from this player's perspective
+        if status == 'player_blackjack':
+            if perspective == 'player':
+                result_msg = f"✅ **You have Blackjack!** You win {humanize_number(int(bet * 2.5))} credits!"
+            else:
+                result_msg = f"❌ **{player.name} has Blackjack!** You lost {humanize_number(bet)} credits."
+        elif status == 'opponent_blackjack':
+            if perspective == 'player':
+                result_msg = f"❌ **{opponent.name} has Blackjack!** You lost {humanize_number(bet)} credits."
+            else:
+                result_msg = f"✅ **You have Blackjack!** You win {humanize_number(int(bet * 2.5))} credits!"
+        elif status == 'player_win':
+            if perspective == 'player':
+                result_msg = f"✅ **You Win!** You win {humanize_number(int(bet * 2))} credits!"
+            else:
+                result_msg = f"❌ **{player.name} Wins!** You lost {humanize_number(bet)} credits."
+        elif status == 'opponent_win':
+            if perspective == 'player':
+                result_msg = f"❌ **{opponent.name} Wins!** You lost {humanize_number(bet)} credits."
+            else:
+                result_msg = f"✅ **You Win!** You win {humanize_number(int(bet * 2))} credits!"
+        elif status == 'opponent_bust':
+            if perspective == 'player':
+                result_msg = f"✅ **{opponent.name} Bust!** You win {humanize_number(int(bet * 2))} credits!"
+            else:
+                result_msg = f"❌ **You Bust!** You lost {humanize_number(bet)} credits."
+        elif status == 'bust':
+            if perspective == 'player':
+                result_msg = f"❌ **You Bust!** You lost {humanize_number(bet)} credits."
+            else:
+                result_msg = f"✅ **{player.name} Bust!** You win {humanize_number(int(bet * 2))} credits!"
+        elif status == 'push':
+            result_msg = f"🤝 **Push!** Your bet of {humanize_number(bet)} credits is returned."
+        else:
+            result_msg = "Game in progress..."
+        
+        embed.add_field(name="Result", value=result_msg, inline=False)
+        return embed
+    
+    async def _get_coinflip_result_embed(self, player, opponent, game_data, perspective):
+        """Generate a personalized coinflip result embed from a player's perspective."""
+        status = game_data['status']
+        bet = game_data['bet']
+        coin_result = game_data['coin_result']
+        
+        if perspective == 'player':
+            player_choice = game_data['player_choice']
+            opponent_choice = game_data['opponent_choice']
+            viewer = player
+            other = opponent
+        else:  # opponent perspective
+            player_choice = game_data['opponent_choice']
+            opponent_choice = game_data['player_choice']
+            viewer = opponent
+            other = player
+        
+        embed = discord.Embed(title="🪙 Coinflip Result 🪙", color=discord.Color.gold())
+        
+        # Show the flip result
+        flip_emoji = "🟤" if coin_result == "Heads" else "⚪"
+        embed.add_field(
+            name="Coin Flip Result",
+            value=f"{flip_emoji} **{coin_result}**",
+            inline=False
+        )
+        
+        # Show both players' choices
+        embed.add_field(
+            name="Choices",
+            value=f"**Your choice:** {player_choice}\n**{other.name}'s choice:** {opponent_choice}",
+            inline=False
+        )
+        
+        # Result message from this player's perspective
+        if status == 'player_win':
+            if perspective == 'player':
+                result_msg = f"✅ **You Win!** You win {humanize_number(bet * 2)} credits!"
+            else:
+                result_msg = f"❌ **{player.name} Wins!** You lost {humanize_number(bet)} credits."
+        elif status == 'opponent_win':
+            if perspective == 'player':
+                result_msg = f"❌ **{opponent.name} Wins!** You lost {humanize_number(bet)} credits."
+            else:
+                result_msg = f"✅ **You Win!** You win {humanize_number(bet * 2)} credits!"
+        elif status == 'push':
+            result_msg = f"🤝 **Push!** Both chose {coin_result}. Your bet of {humanize_number(bet)} credits is returned."
+        elif status == 'both_lose':
+            result_msg = f"❌ **Both Wrong!** The coin landed on {coin_result}, but both chose incorrectly. Bets are lost."
+        else:
+            result_msg = "Game in progress..."
+        
+        embed.add_field(name="Result", value=result_msg, inline=False)
+        return embed
+    
     @commands.command()
     @commands.guild_only()
     async def blackjack(self, ctx, bet: int = None, opponent: discord.Member = None):
@@ -565,7 +699,10 @@ class SaiCasino(commands.Cog):
             await accept_view.wait()
             
             if not accept_view.accepted:
-                return await msg.edit(content=f"❌ {opponent.mention} declined the challenge!", view=None)
+                decline_msg = f"❌ {opponent.mention} declined the challenge!" if accept_view.timed_out else f"❌ {opponent.mention} declined the challenge!"
+                if accept_view.timed_out:
+                    decline_msg = f"❌ Challenge acceptance period is over! {opponent.mention} didn't respond in time."
+                return await msg.edit(content=decline_msg, view=None)
         
         # Withdraw bets
         await bank.withdraw_credits(ctx.author, bet)
@@ -715,6 +852,18 @@ class SaiCasino(commands.Cog):
                 elif game_data['status'] == 'push':
                     await bank.deposit_credits(ctx.author, bet)
         
+        # Send personalized results to each player (PVP only)
+        if game_data['mode'] == 'pvp':
+            # Generate result embeds for each player
+            player_embed = await self._get_player_result_embed(ctx.author, opponent, game_data, 'player')
+            opponent_embed = await self._get_player_result_embed(ctx.author, opponent, game_data, 'opponent')
+            
+            try:
+                await ctx.send(embed=player_embed, ephemeral=True)
+                await opponent.send(embed=opponent_embed)
+            except discord.HTTPException:
+                pass
+        
         # Schedule message deletion after 2 minutes
         async def delete_message():
             await asyncio.sleep(120)
@@ -768,7 +917,10 @@ class SaiCasino(commands.Cog):
             await accept_view.wait()
             
             if not accept_view.accepted:
-                return await msg.edit(content=f"❌ {opponent.mention} declined the challenge!", view=None)
+                decline_msg = f"❌ {opponent.mention} declined the challenge!"
+                if accept_view.timed_out:
+                    decline_msg = f"❌ Challenge acceptance period is over! {opponent.mention} didn't respond in time."
+                return await msg.edit(content=decline_msg, view=None)
         
         # Withdraw bets
         await bank.withdraw_credits(ctx.author, bet)
@@ -861,6 +1013,16 @@ class SaiCasino(commands.Cog):
                 await bank.deposit_credits(ctx.author, bet)
                 await bank.deposit_credits(opponent, bet)
             # If both_lose, neither gets credits (both bets are kept)
+            
+            # Send personalized messages to each player
+            player_embed = await self._get_coinflip_result_embed(ctx.author, opponent, game_data, 'player')
+            opponent_embed = await self._get_coinflip_result_embed(ctx.author, opponent, game_data, 'opponent')
+            
+            try:
+                await ctx.send(embed=player_embed, ephemeral=True)
+                await opponent.send(embed=opponent_embed)
+            except discord.HTTPException:
+                pass
         else:
             # Dealer mode payouts
             if game_data['status'] == 'win':

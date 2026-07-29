@@ -372,30 +372,8 @@ class MarketTrade(commands.Cog):
         return True
 
     async def _send_group_help_hint(self, ctx):
-        command_name = ctx.command.qualified_name if ctx.command else "market"
-        command_parts = command_name.split()
-        root_invoked_name = None
-        invoked_parents = list(getattr(ctx, "invoked_parents", []))
-        if invoked_parents:
-            root_invoked_name = invoked_parents[0]
-        elif getattr(ctx, "invoked_with", None):
-            root_invoked_name = str(ctx.invoked_with)
-        if not root_invoked_name:
-            root_invoked_name = "market"
-        if command_parts and command_parts[0] == "market":
-            command_parts[0] = root_invoked_name
-        hinted_command = " ".join(command_parts)
-        subcommand_passed = str(getattr(ctx, "subcommand_passed", "") or "").strip()
-        if subcommand_passed and ctx.command is not None:
-            if subcommand_passed.lower() in {"help", "h"}:
-                await ctx.send_help(ctx.command)
-                return
-            await ctx.send(
-                f"You made a mistake in subcommand `{subcommand_passed}`. "
-                f"Use `{ctx.clean_prefix}{hinted_command} help` to see valid subcommands."
-            )
-            return
-        await ctx.send(f"Use `{ctx.clean_prefix}{hinted_command} help` to see subcommands.")
+        """Send a hint to use !!market help for more info."""
+        await ctx.send(f"Use `{ctx.clean_prefix}market help` for available commands.")
 
     @staticmethod
     def _build_graph_image(values, symbol: str, asset_name: str, window_minutes: int):
@@ -1301,7 +1279,7 @@ class MarketTrade(commands.Cog):
                      "`asset setprice <symbol> <price>` - Set asset price\n"
                      "`asset setminprice <symbol> <price>` - Set minimum price\n"
                      "`asset setmaxprice <symbol> <price>` - Set maximum price\n"
-                     "`admin setalllimits <min> <max>` - Set min/max for all assets",
+                     "`asset setalllimits <min> <max>` - Set min/max for all assets",
                inline=False
            )
 
@@ -2990,8 +2968,8 @@ class MarketTrade(commands.Cog):
             f"`{normalized_symbol}` maximum price set to {humanize_number(rounded_max_price)}."
         )
 
-    @market_admin.command(name="setalllimits")
-    async def market_admin_setalllimits(self, ctx, min_price: float, max_price: float):
+    @market_asset.command(name="setalllimits")
+    async def market_asset_setalllimits(self, ctx, min_price: float, max_price: float):
         """Set the min and max price range for every asset."""
         await self._ensure_guild_initialized(ctx.guild.id)
         if min_price <= 0 or max_price <= 0:

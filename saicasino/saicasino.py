@@ -860,7 +860,7 @@ class SaiCasino(commands.Cog):
             
             try:
                 await ctx.send(embed=player_embed, ephemeral=True)
-                await opponent.send(embed=opponent_embed)
+                await ctx.send(f"{opponent.mention}", embed=opponent_embed, ephemeral=True)
             except discord.HTTPException:
                 pass
         
@@ -1020,7 +1020,7 @@ class SaiCasino(commands.Cog):
             
             try:
                 await ctx.send(embed=player_embed, ephemeral=True)
-                await opponent.send(embed=opponent_embed)
+                await ctx.send(f"{opponent.mention}", embed=opponent_embed, ephemeral=True)
             except discord.HTTPException:
                 pass
         else:

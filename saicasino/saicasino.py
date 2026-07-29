@@ -35,6 +35,31 @@ class OpponentAcceptView(discord.ui.View):
         self.timed_out = True
 
 
+class PVPResultView(discord.ui.View):
+    """View that lets each player reveal only their own result."""
+
+    def __init__(self, game_data, result_callback, timeout=120):
+        super().__init__(timeout=timeout)
+        self.game_data = game_data
+        self.result_callback = result_callback
+
+    @discord.ui.button(label="View My Result", style=discord.ButtonStyle.primary, emoji="🔎")
+    async def view_result_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Send the result embed privately to the participant who clicked."""
+        is_player = interaction.user.id == self.game_data["player_id"]
+        is_opponent = interaction.user.id == self.game_data["opponent_id"]
+
+        if not (is_player or is_opponent):
+            await interaction.response.send_message(
+                "This result is only for the two players in this game.",
+                ephemeral=True,
+            )
+            return
+
+        embed = await self.result_callback(self.game_data, interaction.user)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 class GameModeSelect(discord.ui.View):
     """View for selecting game mode (dealer vs player)."""
     
@@ -302,28 +327,33 @@ class BlackjackGameView(discord.ui.View):
         
         if mode == 'pvp':
             # PVP messages with player names
+            player = self.game_data['player']
             opponent = self.game_data['opponent']
+            player_name = player.mention if player else "Player"
             opponent_name = opponent.mention if opponent else "Opponent"
             
             if status == 'playing':
                 return "Players' turn - Hit or Stand?"
             elif status == 'bust':
-                return f"❌ **Bust!** You went over 21. Lost {humanize_number(bet)} credits."
+                winnings = bet * 2
+                return f"❌ **{player_name} Bust!** {opponent_name} wins {humanize_number(winnings)} credits."
             elif status == 'opponent_bust':
                 winnings = bet * 2
-                return f"✅ **{opponent_name} Bust!** You win {humanize_number(winnings)} credits!"
+                return f"❌ **{opponent_name} Bust!** {player_name} wins {humanize_number(winnings)} credits."
             elif status == 'player_blackjack':
                 winnings = int(bet * 2.5)
-                return f"✅ **Blackjack!** You win {humanize_number(winnings)} credits!"
+                return f"✅ **{player_name} Blackjack!** {player_name} wins {humanize_number(winnings)} credits."
             elif status == 'opponent_blackjack':
-                return f"❌ **{opponent_name} has Blackjack!** Lost {humanize_number(bet)} credits."
+                winnings = int(bet * 2.5)
+                return f"✅ **{opponent_name} Blackjack!** {opponent_name} wins {humanize_number(winnings)} credits."
             elif status == 'player_win':
                 winnings = bet * 2
-                return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
+                return f"✅ **{player_name} Wins!** {player_name} wins {humanize_number(winnings)} credits."
             elif status == 'opponent_win':
-                return f"❌ **{opponent_name} Wins!** Lost {humanize_number(bet)} credits."
+                winnings = bet * 2
+                return f"✅ **{opponent_name} Wins!** {opponent_name} wins {humanize_number(winnings)} credits."
             elif status == 'push':
-                return f"🤝 **Push!** Your bet of {humanize_number(bet)} credits is returned."
+                return f"🤝 **Push!** Both bets of {humanize_number(bet)} credits are returned."
         else:
             # Dealer mode messages
             if status == 'playing':
@@ -457,9 +487,10 @@ class CoinflipGameView(discord.ui.View):
             player_choice = self.game_data['player_choice']
             opponent_choice = self.game_data['opponent_choice']
             opponent = self.game_data['opponent']
+            player = self.game_data['player']
             
             embed.add_field(
-                name="Your Choice",
+                name=f"{player.name}'s Choice",
                 value=f"**{player_choice.upper() if player_choice else '?'}**",
                 inline=True
             )
@@ -497,20 +528,23 @@ class CoinflipGameView(discord.ui.View):
         
         if self.game_data['mode'] == 'pvp':
             # PVP messages with player names
+            player = self.game_data['player']
             opponent = self.game_data['opponent']
+            player_name = player.mention if player else "Player"
             opponent_name = opponent.mention if opponent else "Opponent"
             
             if status == 'waiting':
                 return "Waiting for players' choices..."
             elif status == 'player_win':
                 winnings = bet * 2
-                return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
+                return f"✅ **{player_name} Wins!** {player_name} wins {humanize_number(winnings)} credits."
             elif status == 'opponent_win':
-                return f"❌ **{opponent_name} Wins!** Lost {humanize_number(bet)} credits."
+                winnings = bet * 2
+                return f"✅ **{opponent_name} Wins!** {opponent_name} wins {humanize_number(winnings)} credits."
             elif status == 'push':
-                return f"🤝 **Push!** Both matched the coin. Your bet of {humanize_number(bet)} credits is returned."
+                return f"🤝 **Push!** Both matched the coin. Bets of {humanize_number(bet)} credits are returned."
             elif status == 'both_lose':
-                return f"❌ **Both Lose!** Neither matched. Bets kept."
+                return f"❌ **Both Lose!** Neither matched. Bets are kept."
         else:
             # Dealer mode messages
             if status == 'waiting':
@@ -655,6 +689,16 @@ class SaiCasino(commands.Cog):
         
         embed.add_field(name="Result", value=result_msg, inline=False)
         return embed
+
+    async def _build_blackjack_private_result(self, game_data, user):
+        """Build the private blackjack result embed for a specific participant."""
+        perspective = 'player' if user.id == game_data['player_id'] else 'opponent'
+        return await self._get_player_result_embed(game_data['player'], game_data['opponent'], game_data, perspective)
+
+    async def _build_coinflip_private_result(self, game_data, user):
+        """Build the private coinflip result embed for a specific participant."""
+        perspective = 'player' if user.id == game_data['player_id'] else 'opponent'
+        return await self._get_coinflip_result_embed(game_data['player'], game_data['opponent'], game_data, perspective)
     
     @commands.command()
     @commands.guild_only()
@@ -732,6 +776,7 @@ class SaiCasino(commands.Cog):
         dealer_blackjack = dealer_hand.is_blackjack() if not opponent else None
         
         game_data = {
+            'player': ctx.author,
             'player_id': ctx.author.id,
             'opponent_id': opponent.id if opponent else None,
             'opponent': opponent,
@@ -814,8 +859,11 @@ class SaiCasino(commands.Cog):
         # Handle final winnings/losses
         if game_data['status'] != 'playing':
             final_embed = view._create_game_embed()
+            result_view = None
+            if game_data['mode'] == 'pvp':
+                result_view = PVPResultView(game_data, self._build_blackjack_private_result)
             try:
-                await message.edit(embed=final_embed)
+                await message.edit(embed=final_embed, view=result_view)
             except discord.HTTPException:
                 pass
             
@@ -851,18 +899,6 @@ class SaiCasino(commands.Cog):
                     await bank.deposit_credits(ctx.author, winnings)
                 elif game_data['status'] == 'push':
                     await bank.deposit_credits(ctx.author, bet)
-        
-        # Send personalized results to each player (PVP only)
-        if game_data['mode'] == 'pvp':
-            # Generate result embeds for each player
-            player_embed = await self._get_player_result_embed(ctx.author, opponent, game_data, 'player')
-            opponent_embed = await self._get_player_result_embed(ctx.author, opponent, game_data, 'opponent')
-            
-            try:
-                await ctx.send(embed=player_embed, ephemeral=True)
-                await ctx.send(f"{opponent.mention}", embed=opponent_embed, ephemeral=True)
-            except discord.HTTPException:
-                pass
         
         # Schedule message deletion after 2 minutes
         async def delete_message():
@@ -929,6 +965,7 @@ class SaiCasino(commands.Cog):
         
         # Initialize game
         game_data = {
+            'player': ctx.author,
             'player_id': ctx.author.id,
             'opponent_id': opponent.id if opponent else None,
             'opponent': opponent,
@@ -994,8 +1031,11 @@ class SaiCasino(commands.Cog):
         
         # Handle final winnings/losses
         final_embed = view._create_game_embed()
+        result_view = None
+        if game_data['mode'] == 'pvp':
+            result_view = PVPResultView(game_data, self._build_coinflip_private_result)
         try:
-            await message.edit(embed=final_embed)
+            await message.edit(embed=final_embed, view=result_view)
         except discord.HTTPException:
             pass
         
@@ -1014,15 +1054,6 @@ class SaiCasino(commands.Cog):
                 await bank.deposit_credits(opponent, bet)
             # If both_lose, neither gets credits (both bets are kept)
             
-            # Send personalized messages to each player
-            player_embed = await self._get_coinflip_result_embed(ctx.author, opponent, game_data, 'player')
-            opponent_embed = await self._get_coinflip_result_embed(ctx.author, opponent, game_data, 'opponent')
-            
-            try:
-                await ctx.send(embed=player_embed, ephemeral=True)
-                await ctx.send(f"{opponent.mention}", embed=opponent_embed, ephemeral=True)
-            except discord.HTTPException:
-                pass
         else:
             # Dealer mode payouts
             if game_data['status'] == 'win':

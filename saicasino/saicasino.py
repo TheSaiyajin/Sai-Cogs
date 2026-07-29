@@ -645,6 +645,35 @@ class SaiCasino(commands.Cog):
         if game_data['status'] == 'playing':
             await view.wait()
         
+        # Handle timeout (game timed out without completion)
+        if game_data['status'] == 'playing':
+            # Game timed out, return bets
+            await bank.deposit_credits(ctx.author, bet)
+            if opponent:
+                await bank.deposit_credits(opponent, bet)
+            
+            timeout_embed = discord.Embed(title="♠ Blackjack ♠", color=discord.Color.red())
+            timeout_embed.add_field(
+                name="Game Timeout",
+                value="⏰ Game timed out. All bets returned.",
+                inline=False
+            )
+            try:
+                await message.edit(embed=timeout_embed)
+            except discord.HTTPException:
+                pass
+            
+            # Schedule message deletion after 2 minutes
+            async def delete_message():
+                await asyncio.sleep(120)
+                try:
+                    await message.delete()
+                except discord.HTTPException:
+                    pass
+            
+            asyncio.create_task(delete_message())
+            return
+        
         # Handle final winnings/losses
         if game_data['status'] != 'playing':
             final_embed = view._create_game_embed()
@@ -791,6 +820,25 @@ class SaiCasino(commands.Cog):
         
         # Wait for player choice
         await view.wait()
+        
+        # Handle timeout (game didn't get a choice)
+        if game_data['coin_result'] is None:
+            # Game timed out, return bets
+            await bank.deposit_credits(ctx.author, bet)
+            if opponent:
+                await bank.deposit_credits(opponent, bet)
+            
+            timeout_embed = discord.Embed(title="🪙 Coinflip 🪙", color=discord.Color.red())
+            timeout_embed.add_field(
+                name="Game Timeout",
+                value="⏰ No one made a choice in time. All bets returned.",
+                inline=False
+            )
+            try:
+                await message.edit(embed=timeout_embed)
+            except discord.HTTPException:
+                pass
+            return
         
         # Handle final winnings/losses
         final_embed = view._create_game_embed()

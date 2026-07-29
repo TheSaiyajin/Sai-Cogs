@@ -1227,12 +1227,6 @@ class MarketTrade(commands.Cog):
            description="Complete list of market trading commands available to you",
            color=discord.Color.green()
        )
-       embed.add_field(
-           name="**Aliases**",
-           value="`market|mt`, `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`,\n"
-                 "`top|leaderboard|lb`, `autobuy|ab`, `autosell|as`, `set|create|add`, `list|ls`, `remove|rm|del`",
-           inline=False
-       )
 
        # Trading Commands
        embed.add_field(
@@ -1240,10 +1234,16 @@ class MarketTrade(commands.Cog):
            value="`buy <symbol> <qty>` - Buy an asset with credits\n"
                  "`sell <symbol> <qty|all>` - Sell asset or everything\n"
                  "`portfolio [member]` - View holdings and value\n"
-                 "`top profit [limit]` - Top player profit leaderboard\n"
-                 "`top value [limit]` - Top player portfolio value leaderboard\n"
                  "`prices` - Show current asset prices\n"
                  "`graph <symbol> [window]` - Show price graph (`30m`, `6h`, max `24h`)",
+           inline=False
+       )
+
+       # Leaderboards
+       embed.add_field(
+           name="**Leaderboards**",
+           value="`top profit [limit]` - Top player profit leaderboard\n"
+                 "`top value [limit]` - Top player portfolio value leaderboard",
            inline=False
        )
 
@@ -1252,7 +1252,6 @@ class MarketTrade(commands.Cog):
            name="**Auto-Buy Orders**",
            value="`autobuy set <symbol> <price> <qty>` - Buy when price drops\n"
                  "`autobuy list` - List your auto-buy orders\n"
-                 "(order setup requires ✅/❌ confirmation)\n"
                  "`autobuy remove <symbol>` - Remove auto-buy orders",
            inline=False
        )
@@ -1261,8 +1260,16 @@ class MarketTrade(commands.Cog):
            name="**Auto-Sell Orders**",
            value="`autosell set <symbol> <price> <qty|all>` - Sell when price rises\n"
                  "`autosell list` - List your auto-sell orders\n"
-                 "(order setup requires ✅/❌ confirmation)\n"
                  "`autosell remove <symbol>` - Remove auto-sell orders",
+           inline=False
+       )
+
+       # Aliases
+       embed.add_field(
+           name="**Quick Aliases**",
+           value="`market` → `mt` | `buy` → `b` | `sell` → `s` | `prices` → `price`, `pr` |\n"
+                 "`portfolio` → `pf`, `port` | `graph` → `chart`, `g` | `top` → `leaderboard`, `lb` |\n"
+                 "`autobuy` → `ab` | `autosell` → `as`",
            inline=False
        )
 
@@ -1278,12 +1285,6 @@ class MarketTrade(commands.Cog):
            description="Complete list of all market trading commands",
            color=discord.Color.gold()
        )
-       embed.add_field(
-           name="**Aliases**",
-           value="`market|mt`, `buy|b`, `sell|s`, `prices|price|pr`, `portfolio|pf|port`, `graph|chart|g`,\n"
-                 "`top|leaderboard|lb`, `autobuy|ab`, `autosell|as`, `set|create|add`, `list|ls`, `remove|rm|del`",
-           inline=False
-       )
 
        # Trading Commands
        embed.add_field(
@@ -1291,10 +1292,16 @@ class MarketTrade(commands.Cog):
            value="`buy <symbol> <qty>` - Buy an asset with credits\n"
                  "`sell <symbol> <qty|all>` - Sell asset or everything\n"
                  "`portfolio [member]` - View holdings and value\n"
-                 "`top profit [limit]` - Top player profit leaderboard\n"
-                 "`top value [limit]` - Top player portfolio value leaderboard\n"
                  "`prices` - Show current asset prices\n"
                  "`graph <symbol> [window]` - Show price graph (`30m`, `6h`, max `24h`)",
+           inline=False
+       )
+
+       # Leaderboards
+       embed.add_field(
+           name="**Leaderboards**",
+           value="`top profit [limit]` - Top player profit leaderboard\n"
+                 "`top value [limit]` - Top player portfolio value leaderboard",
            inline=False
        )
 
@@ -1303,7 +1310,6 @@ class MarketTrade(commands.Cog):
            name="**Auto-Buy Orders**",
            value="`autobuy set <symbol> <price> <qty>` - Buy when price drops\n"
                  "`autobuy list` - List your auto-buy orders\n"
-                 "(order setup requires ✅/❌ confirmation)\n"
                  "`autobuy remove <symbol>` - Remove auto-buy orders",
            inline=False
        )
@@ -1312,7 +1318,6 @@ class MarketTrade(commands.Cog):
            name="**Auto-Sell Orders**",
            value="`autosell set <symbol> <price> <qty|all>` - Sell when price rises\n"
                  "`autosell list` - List your auto-sell orders\n"
-                 "(order setup requires ✅/❌ confirmation)\n"
                  "`autosell remove <symbol>` - Remove auto-sell orders",
            inline=False
        )
@@ -1321,6 +1326,7 @@ class MarketTrade(commands.Cog):
        embed.add_field(
            name="**Asset Management** (Admin)",
            value="`asset add <symbol> <kind> <price> <name>` - Add tradable asset\n"
+                 "`asset remove <symbol>` - Remove a tradable asset\n"
                  "`asset list` - List all assets\n"
                  "`asset info <symbol>` - Show asset details & profile\n"
                  "`asset setprice <symbol> <price>` - Set asset price\n"
@@ -1338,26 +1344,38 @@ class MarketTrade(commands.Cog):
                  "`cycle info <symbol>` - Show current cycle profile and next shift\n"
                  "`cycle announce <true|false>` - Toggle profile change announcements\n"
                  "`cycle history [limit]` - Show recent profile changes\n"
-                 "`cycle clearhistory` - Clear profile change history\n"
-                 "Profiles: `stable`, `uptrend`, `downtrend`, `swing`, `wild`, `bullrun`, `crash`, `recovery`, `flat`",
+                 "`cycle clearhistory` - Clear profile change history",
            inline=False
        )
 
-       # Price Control (Admin)
+       # Asset Parameters (Admin)
        embed.add_field(
-           name="**Price Control** (Admin)",
-           value="`setdrift <value>` - Set baseline price change (-0.2 to 0.2)\n"
-                 "`setbullbias <value>` - Set uptrend preference (-0.4 to 0.4)\n"
-                 "`fees show` - Show configured trading fees\n"
-                 "`fees buy <percent>` - Set buy fee percent\n"
-                 "`fees sell <percent>` - Set sell fee percent\n"
-                 "`limits show` - Show configured trade limits\n"
+           name="**Asset Parameters** (Admin)",
+           value="`asset setvolatility <symbol> <percent>` - Set max price change per update\n"
+                 "`asset setrisk <symbol> <multiplier>` - Set directional movement strength\n"
+                 "`asset setmomentum <symbol> <percent>` - Set trend continuation chance\n"
+                 "`asset setdrift <symbol> <percent>` - Set baseline per-tick drift\n"
+                 "`asset setbullbias <symbol> <percent>` - Set uptrend/downtrend preference",
+           inline=False
+       )
+
+       # Trading Fees (Admin)
+       embed.add_field(
+           name="**Trading Fees** (Admin)",
+           value="`fees show` - Show configured trading fees\n"
+                 "`fees buy <percent>` - Set buy fee percent (0-100)\n"
+                 "`fees sell <percent>` - Set sell fee percent (0-100)",
+           inline=False
+       )
+
+       # Trading Limits (Admin)
+       embed.add_field(
+           name="**Trading Limits** (Admin)",
+           value="`limits show` - Show configured trade limits\n"
                  "`limits value <credits>` - Set daily traded value limit (0 = unlimited)\n"
-                 "`limits usage [member]` - Show daily usage counters\n"
                  "`limits trades <count>` - Set daily trade count limit (0 = unlimited)\n"
-                 "`limits reset <member>` - Reset a member usage counters\n"
-                 "`tick` - Manually trigger 1 price update\n"
-                 "`ticks <count>` - Run many price updates at once (testing)",
+                 "`limits usage [member]` - Show daily usage counters\n"
+                 "`limits reset <member>` - Reset a member's usage counters",
            inline=False
        )
 
@@ -1365,7 +1383,7 @@ class MarketTrade(commands.Cog):
        embed.add_field(
            name="**Market Events** (Admin)",
            value="`event list` - List active events\n"
-                 "`event start <symbol> <percent> <ticks>` - Start event\n"
+                 "`event start <symbol> <percent> <ticks>` - Start event for asset\n"
                  "`event clear [symbol]` - Clear event(s)\n"
                  "`event random <enabled>` - Enable/disable random events\n"
                  "`event chance <percent>` - Set random event chance\n"
@@ -1374,7 +1392,36 @@ class MarketTrade(commands.Cog):
            inline=False
        )
 
-       embed.set_footer(text="Use [p]market <command> help for more info on any command")
+       # Market Utilities (Admin)
+       embed.add_field(
+           name="**Market Utilities** (Admin)",
+           value="`tick` - Manually trigger 1 price update\n"
+                 "`ticks <count>` - Run many price updates at once (testing)\n"
+                 "`liveprices` - Post live prices message (auto-updates)\n"
+                 "`triggerorders` - Manually trigger auto-order processing",
+           inline=False
+       )
+
+       # Admin Utilities (Admin)
+       embed.add_field(
+           name="**Admin Utilities** (Admin)",
+           value="`admin deposit <member> <symbol> <qty>` - Add holdings to member\n"
+                 "`admin remove <member> <symbol> <qty>` - Remove holdings from member\n"
+                 "`admin set <member> <symbol> <qty>` - Set exact holdings for member",
+           inline=False
+       )
+
+       # Aliases
+       embed.add_field(
+           name="**Quick Aliases**",
+           value="`market` → `mt` | `buy` → `b` | `sell` → `s` | `prices` → `price`, `pr` |\n"
+                 "`portfolio` → `pf`, `port` | `graph` → `chart`, `g` | `top` → `leaderboard`, `lb` |\n"
+                 "`autobuy` → `ab` | `autosell` → `as` | `set` → `create`, `add` | `list` → `ls` |\n"
+                 "`remove` → `rm`, `del`",
+           inline=False
+       )
+
+       embed.set_footer(text="Use `[p]market <command> help` for more info on any command")
        await ctx.send(embed=embed)
 
     @market.group(name="fees", case_insensitive=True, autohelp=False)
@@ -2280,24 +2327,6 @@ class MarketTrade(commands.Cog):
                 )
         await ctx.send("\n".join(lines))
 
-    @market.command(name="debug")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def market_debug(self, ctx):
-        """Show debug info about price update timing."""
-        guild_conf = self.config.guild(ctx.guild)
-        last_update_ts = await guild_conf.last_update_ts()
-        now = time.time()
-        time_since = now - last_update_ts
-        
-        await ctx.send(
-            f"**Update Debug Info:**\n"
-            f"Interval: 1 minute (60 seconds)\n"
-            f"Last update: {last_update_ts}\n"
-            f"Now: {now}\n"
-            f"Time since last update: {time_since:.1f} seconds\n"
-            f"Ready for update: {time_since >= 60}"
-        )
-
     @market.group(name="cycle", case_insensitive=True, autohelp=False)
     @commands.admin_or_permissions(manage_guild=True)
     async def market_cycle(self, ctx):
@@ -2388,95 +2417,6 @@ class MarketTrade(commands.Cog):
         """Clear profile change history log for this server."""
         await self.config.guild(ctx.guild).profile_change_history.set([])
         await ctx.send("Cleared profile change history.")
-
-    @market.command(name="ordersdebug")
-    async def market_ordersdebug(self, ctx):
-        """Show your auto-orders for debugging."""
-        member_conf = self.config.member(ctx.author)
-        auto_orders = await member_conf.auto_orders()
-        holdings = await member_conf.holdings()
-        
-        if not auto_orders:
-            await ctx.send("You have no auto-orders.")
-            return
-        
-        lines = [f"**Your Auto-Orders ({len(auto_orders)} total):**"]
-        for order_id, order in auto_orders.items():
-            order_type = order.get("type", "?")
-            symbol = order.get("symbol", "?")
-            target = order.get("target_price", 0)
-            qty = order.get("quantity", 0)
-            held = holdings.get(symbol, 0)
-            lines.append(f"\n**{order_id}**\n"
-                        f"Type: {order_type}\n"
-                        f"Symbol: {symbol} (holding: {held})\n"
-                        f"Target price: {target}\n"
-                        f"Quantity: {qty} (note: -1 means 'all')\n"
-                        f"Full order data: {order}")
-        
-        await ctx.send("\n".join(lines))
-
-    @market.command(name="testorder")
-    async def market_testorder(self, ctx, symbol: str):
-        """Test if an auto-order would execute (simulates the check)."""
-        guild = ctx.guild
-        assets = await self._get_assets(guild)
-        
-        if symbol.upper() not in assets:
-            await ctx.send(f"Asset `{symbol}` not found.")
-            return
-        
-        asset = assets[symbol.upper()]
-        current_price = float(asset.get("price", 0))
-        
-        member_conf = self.config.member(ctx.author)
-        auto_orders = await member_conf.auto_orders()
-        holdings = await member_conf.holdings()
-        
-        orders_for_symbol = [o for o in auto_orders.values() if o.get("symbol") == symbol.upper()]
-        
-        if not orders_for_symbol:
-            await ctx.send(f"No auto-orders found for `{symbol}`.")
-            return
-        
-        lines = [f"**Testing Auto-Orders for `{symbol}` (current price: {current_price})**\n"]
-        
-        for order in orders_for_symbol:
-            order_type = order.get("type")
-            target_price = float(order.get("target_price", 0))
-            quantity = int(order.get("quantity", 0))
-            owned = int(holdings.get(symbol.upper(), 0))
-            
-            lines.append(f"\n**Type:** {order_type}")
-            lines.append(f"**Target:** {target_price}")
-            lines.append(f"**Current:** {current_price}")
-            
-            if order_type == "buy":
-                condition = current_price <= target_price
-                lines.append(f"**Condition (price <= target):** {condition}")
-                if condition:
-                    lines.append("✅ **WOULD EXECUTE** (if you have credits)")
-                else:
-                    lines.append(f"❌ **Would NOT execute** ({current_price} > {target_price})")
-                    
-            elif order_type == "sell":
-                condition = current_price >= target_price
-                qty_to_sell = owned if quantity == -1 else quantity
-                can_sell = owned >= qty_to_sell and qty_to_sell > 0
-                
-                lines.append(f"**Condition (price >= target):** {condition}")
-                lines.append(f"**Owned:** {owned} | **Need to sell:** {qty_to_sell}")
-                lines.append(f"**Can sell:** {can_sell}")
-                
-                if condition and can_sell:
-                    lines.append("✅ **WOULD EXECUTE**")
-                else:
-                    if not condition:
-                        lines.append(f"❌ **Would NOT execute** ({current_price} < {target_price})")
-                    if not can_sell:
-                        lines.append(f"❌ **Would NOT execute** (not enough holdings: {owned} < {qty_to_sell})")
-        
-        await ctx.send("\n".join(lines))
 
     @market.group(name="admin", case_insensitive=True, autohelp=False)
     @commands.admin_or_permissions(manage_guild=True)

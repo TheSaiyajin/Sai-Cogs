@@ -377,10 +377,13 @@ class MarketTrade(commands.Cog):
 
     @staticmethod
     def _build_graph_image(values, symbol: str, asset_name: str, window_minutes: int):
-        import matplotlib
-        matplotlib.use("Agg")
-        from matplotlib import pyplot as plt
-        from matplotlib.ticker import FuncFormatter
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            from matplotlib import pyplot as plt
+            from matplotlib.ticker import FuncFormatter
+        except ImportError:
+            raise ImportError("matplotlib is required for graph generation. Install with: pip install matplotlib")
 
         background = "#101318"
         chart_bg = "#151A21"
@@ -2158,13 +2161,18 @@ class MarketTrade(commands.Cog):
             values = [float(asset["price"])]
         values = values[-window_minutes:]
         graph_values = self._compress_graph_values(values)
-        image_buffer = self._build_graph_image(graph_values, normalized_symbol, asset["name"], window_minutes)
-        graph_file = discord.File(image_buffer, filename=f"{normalized_symbol.lower()}_graph.png")
-        await ctx.send(
-            f"Price graph for `{normalized_symbol}` ({asset['name']}) "
-            f"using {len(graph_values)} point(s) from {len(values)} minute sample(s).",
-            file=graph_file,
-        )
+        try:
+            image_buffer = self._build_graph_image(graph_values, normalized_symbol, asset["name"], window_minutes)
+            graph_file = discord.File(image_buffer, filename=f"{normalized_symbol.lower()}_graph.png")
+            await ctx.send(
+                f"Price graph for `{normalized_symbol}` ({asset['name']}) "
+                f"using {len(graph_values)} point(s) from {len(values)} minute sample(s).",
+                file=graph_file,
+            )
+        except ImportError:
+            await ctx.send("❌ Graph feature unavailable: matplotlib is not installed.\nAsk server admin to install it with: `pip install matplotlib`")
+        except Exception as e:
+            await ctx.send(f"❌ Error generating graph: {str(e)}")
 
     @market.command(name="tick")
     @commands.admin_or_permissions(manage_guild=True)

@@ -447,8 +447,7 @@ class SaiCasino(commands.Cog):
         # Create the game view and embed
         view = CoinflipGameView(game_data)
         
-        embed = view._create_game_embed()
-        # Update embed message for waiting state
+        # Create initial waiting embed
         embed = discord.Embed(title="🪙 Coinflip 🪙", color=discord.Color.gold())
         embed.add_field(
             name="Choose Your Side",

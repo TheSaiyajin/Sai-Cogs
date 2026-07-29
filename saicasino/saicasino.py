@@ -293,24 +293,27 @@ class BlackjackGameView(discord.ui.View):
         mode = self.game_data['mode']
         
         if mode == 'pvp':
-            # PVP messages
+            # PVP messages with player names
+            opponent = self.game_data['opponent']
+            opponent_name = opponent.mention if opponent else "Opponent"
+            
             if status == 'playing':
                 return "Players' turn - Hit or Stand?"
             elif status == 'bust':
                 return f"❌ **Bust!** You went over 21. Lost {humanize_number(bet)} credits."
             elif status == 'opponent_bust':
                 winnings = bet * 2
-                return f"✅ **Opponent Bust!** You win {humanize_number(winnings)} credits!"
+                return f"✅ **{opponent_name} Bust!** You win {humanize_number(winnings)} credits!"
             elif status == 'player_blackjack':
                 winnings = int(bet * 2.5)
                 return f"✅ **Blackjack!** You win {humanize_number(winnings)} credits!"
             elif status == 'opponent_blackjack':
-                return f"❌ **Opponent has Blackjack!** Lost {humanize_number(bet)} credits."
+                return f"❌ **{opponent_name} has Blackjack!** Lost {humanize_number(bet)} credits."
             elif status == 'player_win':
                 winnings = bet * 2
                 return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
             elif status == 'opponent_win':
-                return f"❌ **Opponent Wins!** Lost {humanize_number(bet)} credits."
+                return f"❌ **{opponent_name} Wins!** Lost {humanize_number(bet)} credits."
             elif status == 'push':
                 return f"🤝 **Push!** Your bet of {humanize_number(bet)} credits is returned."
         else:
@@ -485,14 +488,17 @@ class CoinflipGameView(discord.ui.View):
         bet = self.game_data['bet']
         
         if self.game_data['mode'] == 'pvp':
-            # PVP messages
+            # PVP messages with player names
+            opponent = self.game_data['opponent']
+            opponent_name = opponent.mention if opponent else "Opponent"
+            
             if status == 'waiting':
                 return "Waiting for players' choices..."
             elif status == 'player_win':
                 winnings = bet * 2
                 return f"✅ **You Win!** You win {humanize_number(winnings)} credits!"
             elif status == 'opponent_win':
-                return f"❌ **Opponent Wins!** Lost {humanize_number(bet)} credits."
+                return f"❌ **{opponent_name} Wins!** Lost {humanize_number(bet)} credits."
             elif status == 'push':
                 return f"🤝 **Push!** Both matched the coin. Your bet of {humanize_number(bet)} credits is returned."
             elif status == 'both_lose':

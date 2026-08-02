@@ -301,6 +301,130 @@ class CoinflipGameView(discord.ui.View):
         return "Game in progress..."
 
 
+class ScratchTicketView(discord.ui.View):
+    """View for a scratch ticket game."""
+
+    def __init__(self, game_data, timeout=90):
+        super().__init__(timeout=timeout)
+        self.game_data = game_data
+        self.game_over = False
+        self.board = self._build_board()
+        self.buttons = []
+
+        for index in range(9):
+            button = discord.ui.Button(
+                label="?",
+                style=discord.ButtonStyle.secondary,
+                row=index // 3,
+            )
+
+            async def callback(interaction: discord.Interaction, idx=index, btn=button):
+                if interaction.user.id != self.game_data["player_id"]:
+                    await interaction.response.defer()
+                    return
+
+                if idx in self.game_data["scratched"]:
+                    await interaction.response.defer()
+                    return
+
+                self.game_data["scratched"].add(idx)
+                symbol = self.board[idx]
+                btn.label = symbol
+                btn.style = discord.ButtonStyle.success if symbol == "⭐" else discord.ButtonStyle.danger
+                btn.disabled = True
+
+                if len(self.game_data["scratched"]) >= 9:
+                    self._finish_ticket()
+                    self.game_over = True
+                    for tile in self.buttons:
+                        tile.disabled = True
+                    embed = self._create_game_embed()
+                    await interaction.response.edit_message(embed=embed, view=None)
+                    self.stop()
+                else:
+                    embed = self._create_game_embed()
+                    await interaction.response.edit_message(embed=embed, view=self)
+
+            button.callback = callback
+            self.buttons.append(button)
+            self.add_item(button)
+
+    def _build_board(self):
+        """Build the hidden scratch ticket board."""
+        star_count = random.choices([0, 1, 2, 3], weights=[45, 32, 18, 5], k=1)[0]
+        board = ["⭐"] * star_count + ["💣"] * (9 - star_count)
+        random.shuffle(board)
+        self.game_data["star_count"] = star_count
+        return board
+
+    def _finish_ticket(self):
+        """Resolve the ticket after all tiles are scratched."""
+        star_count = self.board.count("⭐")
+        bet = self.game_data["bet"]
+
+        if star_count == 0:
+            self.game_data["status"] = "lose"
+            self.game_data["payout"] = 0
+        elif star_count == 1:
+            self.game_data["status"] = "small_win"
+            self.game_data["payout"] = int(bet * 1.5)
+        elif star_count == 2:
+            self.game_data["status"] = "big_win"
+            self.game_data["payout"] = bet * 3
+        else:
+            self.game_data["status"] = "jackpot"
+            self.game_data["payout"] = bet * 7
+
+    def _create_game_embed(self):
+        """Create the embed for the current scratch ticket state."""
+        embed = discord.Embed(title="🎟️ Scratch Ticket 🎟️", color=discord.Color.gold())
+        embed.add_field(
+            name="How it works",
+            value="Scratch all tiles. Find ⭐ symbols to win credits.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Tiles Scratched",
+            value=f"{len(self.game_data['scratched'])}/9",
+            inline=True,
+        )
+        embed.add_field(
+            name="Stars Found",
+            value=f"{sum(1 for i in self.game_data['scratched'] if self.board[i] == '⭐')}",
+            inline=True,
+        )
+        embed.add_field(
+            name="Bet",
+            value=f"💰 {humanize_number(self.game_data['bet'])} credits",
+            inline=False,
+        )
+        embed.add_field(
+            name="Result",
+            value=self._get_status_message(),
+            inline=False,
+        )
+        return embed
+
+    def _get_status_message(self):
+        """Get the result message for the scratch ticket."""
+        status = self.game_data["status"]
+        bet = self.game_data["bet"]
+        payout = self.game_data.get("payout", 0)
+        stars = self.board.count("⭐")
+
+        if status == "playing":
+            return "Keep scratching to reveal the prize."
+        if status == "lose":
+            return f"❌ No stars. You lost {humanize_number(bet)} credits."
+        if status == "small_win":
+            return f"✨ 1 star! You win {humanize_number(payout)} credits."
+        if status == "big_win":
+            return f"💎 2 stars! You win {humanize_number(payout)} credits."
+        if status == "jackpot":
+            return f"🏆 JACKPOT! 3 stars! You win {humanize_number(payout)} credits."
+        return f"Scratch complete. Stars found: {stars}."
+
+
 class SaiCasino(commands.Cog):
     """A casino cog with blackjack and coinflip games using Red bank credits."""
     
@@ -544,6 +668,87 @@ class SaiCasino(commands.Cog):
             except discord.HTTPException:
                 pass
         
+        asyncio.create_task(delete_message())
+
+    @commands.command(aliases=["scratch", "scratchticket", "ticket"])
+    @commands.guild_only()
+    async def lotto(self, ctx, bet: int = None):
+        """
+        Play a scratch ticket lottery game.
+
+        Usage: [p]lotto <bet_amount>
+
+        Scratch tiles to reveal stars. More stars means a bigger payout.
+        """
+        if bet is None:
+            return await ctx.send("Please specify a bet amount. Example: `[p]lotto 100`")
+
+        if bet <= 0:
+            return await ctx.send("Bet amount must be greater than 0!")
+
+        balance = await bank.get_balance(ctx.author)
+        if not await bank.can_spend(ctx.author, bet):
+            return await ctx.send(
+                f"You don't have enough credits! Your balance: {humanize_number(balance)}"
+            )
+
+        await bank.withdraw_credits(ctx.author, bet)
+
+        game_data = {
+            'player': ctx.author,
+            'player_id': ctx.author.id,
+            'bet': bet,
+            'status': 'playing',
+            'scratched': set(),
+            'payout': 0,
+        }
+
+        view = ScratchTicketView(game_data)
+        embed = view._create_game_embed()
+        message = await ctx.send(embed=embed, view=view)
+
+        await view.wait()
+
+        if game_data['status'] == 'playing':
+            await bank.deposit_credits(ctx.author, bet)
+            timeout_embed = discord.Embed(title="🎟️ Scratch Ticket 🎟️", color=discord.Color.red())
+            timeout_embed.add_field(
+                name="Game Timeout",
+                value="⏰ Ticket scratched too slowly. Your bet was returned.",
+                inline=False,
+            )
+            try:
+                await message.edit(embed=timeout_embed, view=None)
+            except discord.HTTPException:
+                pass
+
+            async def delete_message():
+                await asyncio.sleep(120)
+                try:
+                    await message.delete()
+                except discord.HTTPException:
+                    pass
+
+            asyncio.create_task(delete_message())
+            return
+
+        final_embed = view._create_game_embed()
+        payout = game_data.get('payout', 0)
+        if payout > 0:
+            await bank.deposit_credits(ctx.author, payout)
+
+        try:
+            await message.edit(embed=final_embed, view=None)
+        except discord.HTTPException:
+            pass
+
+        async def delete_message():
+            await asyncio.sleep(120)
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
+
         asyncio.create_task(delete_message())
 
 

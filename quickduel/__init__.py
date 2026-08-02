@@ -1,0 +1,1 @@
+from .quickduel import setup

@@ -1,0 +1,13 @@
+{
+  "author": ["Copilot"],
+  "install_msg": "Thanks for installing QuickDuel! Use /duel @member to start a best-of duel.",
+  "name": "QuickDuel",
+  "short": "Simple PvP duel mini-games",
+  "description": "A production-ready Red-DiscordBot cog with fast PvP duels, stats, leaderboard, and guild settings.",
+  "tags": ["game", "pvp", "duel", "minigame", "discord"],
+  "requirements": [],
+  "min_bot_version": "3.5.0",
+  "hidden": false,
+  "disabled": false,
+  "end_user_data_statement": "This cog stores per-guild settings and per-member duel statistics such as wins, losses, streaks, and round results."
+}

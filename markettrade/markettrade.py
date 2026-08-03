@@ -610,40 +610,51 @@ class MarketTrade(commands.Cog):
             rendered.append("\n".join([header, *page_lines]))
         return rendered
 
+    def _build_live_prices_embeds(self, pages):
+        embeds = []
+        total_pages = len(pages)
+        for index, page in enumerate(pages, start=1):
+            embed = discord.Embed(
+                title="Current prices" if total_pages == 1 else f"Current prices ({index}/{total_pages})",
+                description=page,
+                color=discord.Color.green(),
+            )
+            embeds.append(embed)
+        return embeds
+
     async def _sync_live_price_pages(self, channel, pages, existing_message_ids=None):
         existing_message_ids = [int(message_id) for message_id in (existing_message_ids or []) if int(message_id) > 0]
-        messages = []
+        embeds = self._build_live_prices_embeds(pages)
+        primary_message = None
 
-        for index, page in enumerate(pages):
-            if index < len(existing_message_ids):
-                message_id = existing_message_ids[index]
-                try:
-                    message = await channel.fetch_message(message_id)
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    message = await channel.send(page)
-                else:
-                    if message.author.id == self.bot.user.id:
-                        try:
-                            await message.edit(content=page)
-                        except (discord.Forbidden, discord.HTTPException):
-                            message = await channel.send(page)
-                    else:
-                        message = await channel.send(page)
-            else:
-                message = await channel.send(page)
-            messages.append(message)
-
-        for message_id in existing_message_ids[len(pages):]:
+        if existing_message_ids:
             try:
-                old_message = await channel.fetch_message(message_id)
+                primary_message = await channel.fetch_message(existing_message_ids[0])
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                continue
-            try:
-                await old_message.delete()
-            except (discord.Forbidden, discord.HTTPException):
-                continue
+                primary_message = None
+            else:
+                if primary_message.author.id != self.bot.user.id:
+                    primary_message = None
 
-        return messages
+            for message_id in existing_message_ids[1:]:
+                try:
+                    old_message = await channel.fetch_message(message_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    continue
+                try:
+                    await old_message.delete()
+                except (discord.Forbidden, discord.HTTPException):
+                    continue
+
+        if primary_message is not None:
+            try:
+                await primary_message.edit(content="Live prices", embeds=embeds)
+                return [primary_message]
+            except (discord.Forbidden, discord.HTTPException):
+                primary_message = None
+
+        message = await channel.send(content="Live prices", embeds=embeds)
+        return [message]
 
     @staticmethod
     def _compute_member_market_stats(member_data, assets):
@@ -768,9 +779,7 @@ class MarketTrade(commands.Cog):
             existing_message_ids = [message_id] if message_id else []
 
         messages = await self._sync_live_price_pages(channel, price_pages, existing_message_ids)
-        await guild_conf.live_prices_message.set(
-            {"channel_id": channel_id, "message_ids": [message.id for message in messages]}
-        )
+        await guild_conf.live_prices_message.set({"channel_id": channel_id, "message_id": messages[0].id})
 
     def _behavior_profile(self, profile: str):
         return behavior_profile(profile)
@@ -2543,7 +2552,7 @@ class MarketTrade(commands.Cog):
         price_pages = self._build_prices_pages(assets, active_events)
         live_messages = await self._sync_live_price_pages(ctx.channel, price_pages)
         await self.config.guild(ctx.guild).live_prices_message.set(
-            {"channel_id": ctx.channel.id, "message_ids": [message.id for message in live_messages]}
+            {"channel_id": ctx.channel.id, "message_id": live_messages[0].id}
         )
         await ctx.send("Live prices message created. I will update it every minute.")
 

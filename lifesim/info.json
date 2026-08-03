@@ -1,0 +1,15 @@
+{
+  "author": ["Sai"],
+  "install_msg": "Thanks for installing LifeSim. Start with `[p]lifesim help` and configure jobs, food, and houses from Discord.",
+  "name": "LifeSim",
+  "short": "Life simulation game with Red bank credits",
+  "description": "A Red Discord bot cog that simulates a small life economy with jobs, food, housing, needs, upkeep, and configurable guild settings.",
+  "tags": ["economy", "game", "simulation", "life", "credits"],
+  "requirements": [],
+  "required_cogs": {},
+  "min_bot_version": "3.5.0",
+  "min_python_version": [3, 8, 0],
+  "hidden": false,
+  "disabled": false,
+  "end_user_data_statement": "This cog stores per-guild life simulation settings (jobs, foods, houses, and tuning values) and per-member life state (job, house, needs, inventory, XP, and timestamps). It does not store real-world personal data."
+}

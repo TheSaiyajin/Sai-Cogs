@@ -3,6 +3,7 @@
 This repository contains Red Discord bot cogs:
 - `saireply`: replies when specific words appear in selected channels.
 - `markettrade`: fake crypto/stock trading game using Red bank credits.
+- `lifesim`: life simulation game with jobs, food, housing, and upkeep.
 - `voterole`: grants a temporary role when a vote event is received (top.gg style events).
 
 ## Features
@@ -16,6 +17,13 @@ This repository contains Red Discord bot cogs:
    - `[p]load saireply`
 3. Configure channels and words with commands in Discord.
 
+## LifeSim Setup
+1. Install and load:
+   - `[p]cog install <your-github-repo-url> lifesim`
+   - `[p]load lifesim`
+2. Use `[p]lifesim help` to see commands.
+3. Configure jobs, food, houses, and simulation settings from Discord.
+
 ## Install from GitHub
 Once this repo is pushed to GitHub, you can install it in Red with:
 
@@ -28,6 +36,43 @@ For vote role rewards:
 - `[p]load voterole`
 - `[p]voterole createrole Voter`
 - `[p]voterole duration 2`
+
+## LifeSim Commands
+- `[p]lifesim profile [member]`
+- `[p]lifesim status [member]`
+- `[p]lifesim work`
+- `[p]lifesim rest`
+- `[p]lifesim jobs list`
+- `[p]lifesim jobs info <job>`
+- `[p]lifesim jobs apply <job>`
+- `[p]lifesim jobs clear`
+- `[p]lifesim jobs admin add <key> <pay> <energy_cost> <hunger_cost> <happiness_cost> <cooldown_minutes> <name...>`
+- `[p]lifesim jobs admin edit <key> <field> <value>`
+- `[p]lifesim jobs admin remove <key>`
+- `[p]lifesim jobs admin resetdefaults`
+- `[p]lifesim shop list`
+- `[p]lifesim shop info <item>`
+- `[p]lifesim shop buy <item> [quantity]`
+- `[p]lifesim shop admin add <key> <price> <hunger_restore> <energy_restore> <happiness_restore> <name...>`
+- `[p]lifesim shop admin edit <key> <field> <value>`
+- `[p]lifesim shop admin remove <key>`
+- `[p]lifesim shop admin resetdefaults`
+- `[p]lifesim inventory`
+- `[p]lifesim eat <item> [quantity]`
+- `[p]lifesim house list`
+- `[p]lifesim house info <house>`
+- `[p]lifesim house buy <house>`
+- `[p]lifesim house current`
+- `[p]lifesim house admin add <key> <price> <upkeep> <work_bonus> <rest_energy> <rest_happiness> <name...>`
+- `[p]lifesim house admin edit <key> <field> <value>`
+- `[p]lifesim house admin remove <key>`
+- `[p]lifesim house admin resetdefaults`
+- `[p]lifesim settings view`
+- `[p]lifesim settings setstarting <hunger|energy|happiness> <value>`
+- `[p]lifesim settings setdecay <hunger|energy|happiness> <value>`
+- `[p]lifesim settings setrest <energy|happiness> <value>`
+- `[p]lifesim settings setupkeep <hours>`
+- `[p]lifesim settings resetdefaults`
 
 ## Commands
 - `[p]saireply channel add #channel`

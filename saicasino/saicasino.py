@@ -351,7 +351,7 @@ class ScratchTicketView(discord.ui.View):
 
     def _build_board(self):
         """Build the hidden scratch ticket board."""
-        star_count = random.choices([0, 1, 2, 3], weights=[45, 32, 18, 5], k=1)[0]
+        star_count = random.choices([0, 1, 2, 3], weights=[45, 35, 15, 5], k=1)[0]
         board = ["⭐"] * star_count + ["💣"] * (9 - star_count)
         random.shuffle(board)
         self.game_data["star_count"] = star_count
@@ -430,6 +430,13 @@ class SaiCasino(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
+
+    async def _delete_invoking_message(self, ctx):
+        """Best-effort delete of the command message."""
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
     
     @commands.command()
     @commands.guild_only()
@@ -442,6 +449,8 @@ class SaiCasino(commands.Cog):
         Bet your Red bank credits and try to get 21 or closer to the dealer's hand
         without going over!
         """
+        asyncio.create_task(self._delete_invoking_message(ctx))
+
         if bet is None:
             return await ctx.send("Please specify a bet amount. Example: `[p]blackjack 100`")
         
@@ -577,6 +586,8 @@ class SaiCasino(commands.Cog):
         
         Bet your Red bank credits and choose heads or tails. 50/50 chance to win double!
         """
+        asyncio.create_task(self._delete_invoking_message(ctx))
+
         if bet is None:
             return await ctx.send("Please specify a bet amount. Example: `[p]coinflip 100`")
         
@@ -680,6 +691,8 @@ class SaiCasino(commands.Cog):
 
         Scratch tiles to reveal stars. More stars means a bigger payout.
         """
+        asyncio.create_task(self._delete_invoking_message(ctx))
+
         if bet is None:
             return await ctx.send("Please specify a bet amount. Example: `[p]lotto 100`")
 

@@ -42,6 +42,7 @@ For vote role rewards:
 - `[p]lifesim status [member]`
 - `[p]lifesim work`
 - `[p]lifesim rest`
+- `[p]lifesim sleep`
 - `[p]lifesim jobs list`
 - `[p]lifesim jobs info <job>`
 - `[p]lifesim jobs apply <job>`
@@ -71,8 +72,11 @@ For vote role rewards:
 - `[p]lifesim settings setstarting <hunger|energy|happiness> <value>`
 - `[p]lifesim settings setdecay <hunger|energy|happiness> <value>`
 - `[p]lifesim settings setrest <energy|happiness> <value>`
+- `[p]lifesim settings setrestcooldown <hours>`
 - `[p]lifesim settings setupkeep <hours>`
 - `[p]lifesim settings resetdefaults`
+- `[p]lifesim member set <member> <hunger|energy|happiness|xp|job|house> <value>`
+- `[p]lifesim member cooldowns reset <member>`
 
 ## Commands
 - `[p]saireply channel add #channel`

@@ -1,6 +1,6 @@
 import copy
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import discord
 from redbot.core import Config, bank, commands
@@ -30,6 +30,7 @@ class LifeSim(commands.Cog):
                     "energy": 22.0,
                     "happiness": 9.0,
                 },
+                "rest_cooldown_hours": 2.0,
                 "upkeep_interval_hours": 24.0,
             },
             seeded=False,
@@ -43,6 +44,9 @@ class LifeSim(commands.Cog):
             career_xp=0,
             last_update_ts=0.0,
             last_work_ts=0.0,
+            last_rest_ts=0.0,
+            last_sleep_ts=0.0,
+            sleep_lock_until_ts=0.0,
             last_upkeep_ts=0.0,
             inventory={},
         )
@@ -198,6 +202,7 @@ class LifeSim(commands.Cog):
                 "energy": 22.0,
                 "happiness": 9.0,
             },
+            "rest_cooldown_hours": 2.0,
             "upkeep_interval_hours": 24.0,
         }
 
@@ -291,6 +296,66 @@ class LifeSim(commands.Cog):
                     await member_conf.last_upkeep_ts.set(last_upkeep_ts + periods * upkeep_hours * 3600.0)
 
         return notes
+
+    async def _sleep_lock_active(self, member: discord.Member) -> Tuple[bool, float]:
+        member_conf = self.config.member(member)
+        until_ts = float(await member_conf.sleep_lock_until_ts())
+        now = time.time()
+        if until_ts > now:
+            return True, until_ts - now
+        return False, 0.0
+
+    async def _require_active_state(
+        self,
+        ctx: commands.Context,
+        member: Optional[discord.Member] = None,
+        *,
+        bypass_sleep_lock: bool = False,
+    ) -> bool:
+        subject = member or ctx.author
+        if bypass_sleep_lock:
+            return True
+
+        locked, remaining = await self._sleep_lock_active(subject)
+        if locked:
+            hours = int(remaining // 3600)
+            minutes = int((remaining % 3600) // 60)
+            seconds = int(round(remaining % 60))
+            await ctx.send(
+                f"You are sleeping and cannot use LifeSim commands for "
+                f"{hours}h {minutes}m {seconds}s."
+            )
+            return False
+        return True
+
+    async def _set_member_needs(
+        self,
+        member: discord.Member,
+        *,
+        hunger: Optional[float] = None,
+        energy: Optional[float] = None,
+        happiness: Optional[float] = None,
+    ):
+        member_conf = self.config.member(member)
+        changed = False
+        if hunger is not None:
+            await member_conf.hunger.set(self._clamp_need(hunger))
+            changed = True
+        if energy is not None:
+            await member_conf.energy.set(self._clamp_need(energy))
+            changed = True
+        if happiness is not None:
+            await member_conf.happiness.set(self._clamp_need(happiness))
+            changed = True
+        if changed:
+            await member_conf.last_update_ts.set(time.time())
+
+    async def _reset_member_cooldowns(self, member: discord.Member):
+        member_conf = self.config.member(member)
+        await member_conf.last_work_ts.set(0.0)
+        await member_conf.last_rest_ts.set(0.0)
+        await member_conf.last_sleep_ts.set(0.0)
+        await member_conf.sleep_lock_until_ts.set(0.0)
 
     async def _member_house(self, member: discord.Member, guild_data: Dict[str, dict]) -> Optional[dict]:
         house_key = str(await self.config.member(member).house_key())
@@ -391,6 +456,8 @@ class LifeSim(commands.Cog):
     @commands.guild_only()
     async def lifesim_group(self, ctx):
         """Manage and play the LifeSim game."""
+        if not await self._require_active_state(ctx):
+            return
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
@@ -398,6 +465,8 @@ class LifeSim(commands.Cog):
     async def lifesim_profile(self, ctx, member: Optional[discord.Member] = None):
         """Show a member's current life state."""
         member = member or ctx.author
+        if not await self._require_active_state(ctx, member):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         embed = await self._build_profile_embed(member, guild_data)
         await ctx.send(embed=embed)
@@ -406,6 +475,8 @@ class LifeSim(commands.Cog):
     async def lifesim_status(self, ctx, member: Optional[discord.Member] = None):
         """Alias for profile."""
         member = member or ctx.author
+        if not await self._require_active_state(ctx, member):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         embed = await self._build_profile_embed(member, guild_data)
         await ctx.send(embed=embed)
@@ -413,6 +484,8 @@ class LifeSim(commands.Cog):
     @lifesim_group.command(name="work")
     async def lifesim_work(self, ctx):
         """Work your active job to earn bank credits."""
+        if not await self._require_active_state(ctx):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         member_conf = self.config.member(ctx.author)
         job = await self._member_job(ctx.author, guild_data)
@@ -464,11 +537,23 @@ class LifeSim(commands.Cog):
     @lifesim_group.command(name="rest")
     async def lifesim_rest(self, ctx):
         """Rest to recover energy and happiness."""
+        if not await self._require_active_state(ctx):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         member_conf = self.config.member(ctx.author)
         await self._sync_member_state(ctx.author, guild_data)
         settings = guild_data["settings"]
         house = await self._member_house(ctx.author, guild_data)
+        now = time.time()
+        last_rest_ts = float(await member_conf.last_rest_ts())
+        rest_cooldown_seconds = float(settings["rest_cooldown_hours"]) * 3600.0
+        if last_rest_ts > 0.0 and now - last_rest_ts < rest_cooldown_seconds:
+            remaining = int(round(rest_cooldown_seconds - (now - last_rest_ts)))
+            await ctx.send(
+                "Rest is on cooldown. "
+                f"Try again in {remaining // 3600}h {(remaining % 3600) // 60}m {remaining % 60}s."
+            )
+            return
 
         energy = float(await member_conf.energy())
         happiness = float(await member_conf.happiness())
@@ -484,21 +569,60 @@ class LifeSim(commands.Cog):
 
         await member_conf.energy.set(self._clamp_need(energy + energy_gain))
         await member_conf.happiness.set(self._clamp_need(happiness + happiness_gain))
+        await member_conf.last_rest_ts.set(now)
         await ctx.send(
             f"You rested and recovered **{int(round(energy_gain))}** energy and "
             f"**{int(round(happiness_gain))}** happiness."
+        )
+
+    @lifesim_group.command(name="sleep")
+    async def lifesim_sleep(self, ctx):
+        """Sleep to fully recover, then lock LifeSim commands for 8 hours."""
+        if not await self._require_active_state(ctx):
+            return
+        guild_data = await self._get_guild_data(ctx.guild)
+        member_conf = self.config.member(ctx.author)
+        await self._sync_member_state(ctx.author, guild_data)
+
+        now = time.time()
+        last_sleep_ts = float(await member_conf.last_sleep_ts())
+        sleep_cooldown_seconds = 24.0 * 3600.0
+        if last_sleep_ts > 0.0 and now - last_sleep_ts < sleep_cooldown_seconds:
+            remaining = int(round(sleep_cooldown_seconds - (now - last_sleep_ts)))
+            await ctx.send(
+                "Sleep can only be used once per day. "
+                f"Try again in {remaining // 3600}h {(remaining % 3600) // 60}m {remaining % 60}s."
+            )
+            return
+
+        hunger = float(await member_conf.hunger())
+        await self._set_member_needs(
+            ctx.author,
+            hunger=self._clamp_need(hunger - 10.0),
+            energy=100.0,
+            happiness=100.0,
+        )
+        await member_conf.last_sleep_ts.set(now)
+        await member_conf.sleep_lock_until_ts.set(now + (8.0 * 3600.0))
+        await ctx.send(
+            "You went to sleep, fully recovered your energy and happiness, "
+            "and you cannot use LifeSim commands for 8 hours."
         )
 
     @lifesim_group.group(name="jobs")
     @commands.guild_only()
     async def lifesim_jobs_group(self, ctx):
         """Browse and manage available jobs."""
+        if not await self._require_active_state(ctx):
+            return
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
     @lifesim_jobs_group.command(name="list")
     async def lifesim_jobs_list(self, ctx):
         """List all jobs in the server."""
+        if not await self._require_active_state(ctx):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         jobs = guild_data["jobs"]
         lines = [self._format_job_line(key, job) for key, job in sorted(jobs.items())]
@@ -511,6 +635,8 @@ class LifeSim(commands.Cog):
     @lifesim_jobs_group.command(name="info")
     async def lifesim_jobs_info(self, ctx, job_key: str):
         """Show details for a job."""
+        if not await self._require_active_state(ctx):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         key = self._normalize_key(job_key)
         job = guild_data["jobs"].get(key)
@@ -530,6 +656,8 @@ class LifeSim(commands.Cog):
     @lifesim_jobs_group.command(name="apply")
     async def lifesim_jobs_apply(self, ctx, job_key: str):
         """Set your active job."""
+        if not await self._require_active_state(ctx):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         key = self._normalize_key(job_key)
         job = guild_data["jobs"].get(key)
@@ -543,6 +671,8 @@ class LifeSim(commands.Cog):
     @lifesim_jobs_group.command(name="clear")
     async def lifesim_jobs_clear(self, ctx):
         """Leave your current job."""
+        if not await self._require_active_state(ctx):
+            return
         await self.config.member(ctx.author).job_key.set("")
         await ctx.send("You are now unemployed.")
 
@@ -643,12 +773,16 @@ class LifeSim(commands.Cog):
     @lifesim_group.group(name="shop")
     async def lifesim_shop_group(self, ctx):
         """Browse and manage food items."""
+        if not await self._require_active_state(ctx):
+            return
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
     @lifesim_shop_group.command(name="list")
     async def lifesim_shop_list(self, ctx):
         """List all food items."""
+        if not await self._require_active_state(ctx):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         foods = guild_data["foods"]
         lines = [self._format_food_line(key, food) for key, food in sorted(foods.items())]
@@ -661,6 +795,8 @@ class LifeSim(commands.Cog):
     @lifesim_shop_group.command(name="info")
     async def lifesim_shop_info(self, ctx, item_key: str):
         """Show details for a food item."""
+        if not await self._require_active_state(ctx):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         key = self._normalize_key(item_key)
         food = guild_data["foods"].get(key)
@@ -678,6 +814,8 @@ class LifeSim(commands.Cog):
     @lifesim_shop_group.command(name="buy")
     async def lifesim_shop_buy(self, ctx, item_key: str, quantity: int = 1):
         """Buy food into your inventory."""
+        if not await self._require_active_state(ctx):
+            return
         if quantity <= 0:
             await ctx.send("Quantity must be at least 1.")
             return
@@ -784,6 +922,8 @@ class LifeSim(commands.Cog):
     @lifesim_group.command(name="inventory")
     async def lifesim_inventory(self, ctx):
         """Show your food inventory."""
+        if not await self._require_active_state(ctx):
+            return
         member_conf = self.config.member(ctx.author)
         inventory = await member_conf.inventory()
         if not inventory:
@@ -802,6 +942,8 @@ class LifeSim(commands.Cog):
     @lifesim_group.command(name="eat")
     async def lifesim_eat(self, ctx, item_key: str, quantity: int = 1):
         """Consume food from your inventory."""
+        if not await self._require_active_state(ctx):
+            return
         if quantity <= 0:
             await ctx.send("Quantity must be at least 1.")
             return
@@ -842,12 +984,16 @@ class LifeSim(commands.Cog):
     @lifesim_group.group(name="house")
     async def lifesim_house_group(self, ctx):
         """Browse and manage houses."""
+        if not await self._require_active_state(ctx):
+            return
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
     @lifesim_house_group.command(name="list")
     async def lifesim_house_list(self, ctx):
         """List all houses."""
+        if not await self._require_active_state(ctx):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         houses = guild_data["houses"]
         lines = [self._format_house_line(key, house) for key, house in sorted(houses.items())]
@@ -860,6 +1006,8 @@ class LifeSim(commands.Cog):
     @lifesim_house_group.command(name="info")
     async def lifesim_house_info(self, ctx, house_key: str):
         """Show details for a house."""
+        if not await self._require_active_state(ctx):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         key = self._normalize_key(house_key)
         house = guild_data["houses"].get(key)
@@ -878,6 +1026,8 @@ class LifeSim(commands.Cog):
     @lifesim_house_group.command(name="buy")
     async def lifesim_house_buy(self, ctx, house_key: str):
         """Buy and move into a house."""
+        if not await self._require_active_state(ctx):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         key = self._normalize_key(house_key)
         house = guild_data["houses"].get(key)
@@ -899,6 +1049,8 @@ class LifeSim(commands.Cog):
     @lifesim_house_group.command(name="current")
     async def lifesim_house_current(self, ctx):
         """Show your current house."""
+        if not await self._require_active_state(ctx):
+            return
         guild_data = await self._get_guild_data(ctx.guild)
         house = await self._member_house(ctx.author, guild_data)
         if house is None:
@@ -1010,6 +1162,7 @@ class LifeSim(commands.Cog):
             f"energy {int(settings['starting_energy'])}, happiness {int(settings['starting_happiness'])}\n"
             f"- Need decay/hour: hunger {decay['hunger']}, energy {decay['energy']}, happiness {decay['happiness']}\n"
             f"- Rest restore: energy {rest['energy']}, happiness {rest['happiness']}\n"
+            f"- Rest cooldown: {float(settings['rest_cooldown_hours'])} hours\n"
             f"- Upkeep interval: {float(settings['upkeep_interval_hours'])} hours"
         )
 
@@ -1052,6 +1205,16 @@ class LifeSim(commands.Cog):
             settings["rest_restore"][field] = float(value)
         await ctx.send(f"Set rest {field} recovery to {value}.")
 
+    @lifesim_settings_group.command(name="setrestcooldown")
+    async def lifesim_settings_setrestcooldown(self, ctx, hours: float):
+        """Set how often rest can be used."""
+        if hours <= 0:
+            await ctx.send("Hours must be greater than 0.")
+            return
+        async with self.config.guild(ctx.guild).settings() as settings:
+            settings["rest_cooldown_hours"] = float(hours)
+        await ctx.send(f"Set rest cooldown to {hours} hours.")
+
     @lifesim_settings_group.command(name="setupkeep")
     async def lifesim_settings_setupkeep(self, ctx, hours: float):
         """Set how often house upkeep is charged."""
@@ -1067,6 +1230,70 @@ class LifeSim(commands.Cog):
         """Restore the built-in default settings."""
         await self.config.guild(ctx.guild).settings.set(copy.deepcopy(self._default_settings()))
         await ctx.send("Restored the default LifeSim settings.")
+
+    @lifesim_group.group(name="member")
+    @commands.admin_or_permissions(manage_guild=True)
+    async def lifesim_member_group(self, ctx):
+        """Admin tools for member state and cooldowns."""
+        if ctx.invoked_subcommand is None:
+            await ctx.send_help()
+
+    @lifesim_member_group.command(name="set")
+    async def lifesim_member_set(
+        self,
+        ctx,
+        member: discord.Member,
+        field: str,
+        *,
+        value: str,
+    ):
+        """Set a member's life state."""
+        field_name = self._normalize_key(field)
+        valid_fields = {"hunger", "energy", "happiness", "xp", "job", "house"}
+        if field_name not in valid_fields:
+            await ctx.send("Field must be hunger, energy, happiness, xp, job, or house.")
+            return
+
+        guild_data = await self._get_guild_data(ctx.guild)
+        member_conf = self.config.member(member)
+        clear_tokens = {"", "none", "clear", "null"}
+
+        if field_name in {"hunger", "energy", "happiness"}:
+            await self._set_member_needs(member, **{field_name: float(value)})
+        elif field_name == "xp":
+            await member_conf.career_xp.set(max(0, int(float(value))))
+        elif field_name == "job":
+            job_key = self._normalize_key(value)
+            if value.strip().lower() in clear_tokens:
+                job_key = ""
+            elif job_key not in guild_data["jobs"]:
+                await ctx.send("That job does not exist.")
+                return
+            await member_conf.job_key.set(job_key)
+        elif field_name == "house":
+            house_key = self._normalize_key(value)
+            if value.strip().lower() in clear_tokens:
+                house_key = ""
+            elif house_key not in guild_data["houses"]:
+                await ctx.send("That house does not exist.")
+                return
+            await member_conf.house_key.set(house_key)
+            await member_conf.last_upkeep_ts.set(time.time() if house_key else 0.0)
+
+        await ctx.send(f"Updated {member.display_name}'s {field_name}.")
+
+    @lifesim_member_group.group(name="cooldowns")
+    @commands.admin_or_permissions(manage_guild=True)
+    async def lifesim_member_cooldowns_group(self, ctx):
+        """Admin tools for cooldowns."""
+        if ctx.invoked_subcommand is None:
+            await ctx.send_help()
+
+    @lifesim_member_cooldowns_group.command(name="reset")
+    async def lifesim_member_cooldowns_reset(self, ctx, member: discord.Member):
+        """Reset all LifeSim cooldowns for a member."""
+        await self._reset_member_cooldowns(member)
+        await ctx.send(f"Reset LifeSim cooldowns for {member.display_name}.")
 
 
 async def setup(bot):

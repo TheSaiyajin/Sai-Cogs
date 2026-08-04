@@ -30,7 +30,9 @@ class LifeSim(commands.Cog):
                     "energy": 22.0,
                     "happiness": 9.0,
                 },
+                "work_cooldown_hours": 4.0,
                 "rest_cooldown_hours": 2.0,
+                "sleep_cooldown_hours": 24.0,
                 "upkeep_interval_hours": 24.0,
             },
             seeded=False,
@@ -202,7 +204,9 @@ class LifeSim(commands.Cog):
                 "energy": 22.0,
                 "happiness": 9.0,
             },
+            "work_cooldown_hours": 4.0,
             "rest_cooldown_hours": 2.0,
+            "sleep_cooldown_hours": 24.0,
             "upkeep_interval_hours": 24.0,
         }
 
@@ -496,11 +500,11 @@ class LifeSim(commands.Cog):
         notes = await self._sync_member_state(ctx.author, guild_data)
         now = time.time()
         last_work_ts = float(await member_conf.last_work_ts())
-        cooldown_seconds = float(job["cooldown_minutes"]) * 60.0
+        cooldown_seconds = float(guild_data["settings"]["work_cooldown_hours"]) * 3600.0
         if last_work_ts > 0.0 and now - last_work_ts < cooldown_seconds:
             remaining = int(round(cooldown_seconds - (now - last_work_ts)))
             await ctx.send(
-                f"You are still on cooldown for {job['name']}. "
+                "Work is on cooldown. "
                 f"Try again in {remaining // 60}m {remaining % 60}s."
             )
             return
@@ -508,6 +512,12 @@ class LifeSim(commands.Cog):
         hunger = float(await member_conf.hunger())
         energy = float(await member_conf.energy())
         happiness = float(await member_conf.happiness())
+        required_energy = float(job["energy_cost"])
+        if energy < required_energy:
+            await ctx.send(
+                f"You need at least {int(round(required_energy))} energy to work as {job['name']}."
+            )
+            return
         performance = max(0.45, min(1.30, (hunger + energy + happiness) / 300.0 * 1.1))
         house = await self._member_house(ctx.author, guild_data)
         house_bonus = float(house["work_bonus"]) if house else 0.0
@@ -586,11 +596,11 @@ class LifeSim(commands.Cog):
 
         now = time.time()
         last_sleep_ts = float(await member_conf.last_sleep_ts())
-        sleep_cooldown_seconds = 24.0 * 3600.0
+        sleep_cooldown_seconds = float(guild_data["settings"]["sleep_cooldown_hours"]) * 3600.0
         if last_sleep_ts > 0.0 and now - last_sleep_ts < sleep_cooldown_seconds:
             remaining = int(round(sleep_cooldown_seconds - (now - last_sleep_ts)))
             await ctx.send(
-                "Sleep can only be used once per day. "
+                "Sleep is still on cooldown. "
                 f"Try again in {remaining // 3600}h {(remaining % 3600) // 60}m {remaining % 60}s."
             )
             return
@@ -1162,7 +1172,9 @@ class LifeSim(commands.Cog):
             f"energy {int(settings['starting_energy'])}, happiness {int(settings['starting_happiness'])}\n"
             f"- Need decay/hour: hunger {decay['hunger']}, energy {decay['energy']}, happiness {decay['happiness']}\n"
             f"- Rest restore: energy {rest['energy']}, happiness {rest['happiness']}\n"
+            f"- Work cooldown: {float(settings['work_cooldown_hours'])} hours\n"
             f"- Rest cooldown: {float(settings['rest_cooldown_hours'])} hours\n"
+            f"- Sleep cooldown: {float(settings['sleep_cooldown_hours'])} hours\n"
             f"- Upkeep interval: {float(settings['upkeep_interval_hours'])} hours"
         )
 
@@ -1214,6 +1226,26 @@ class LifeSim(commands.Cog):
         async with self.config.guild(ctx.guild).settings() as settings:
             settings["rest_cooldown_hours"] = float(hours)
         await ctx.send(f"Set rest cooldown to {hours} hours.")
+
+    @lifesim_settings_group.command(name="setworkcooldown")
+    async def lifesim_settings_setworkcooldown(self, ctx, hours: float):
+        """Set how often work can be used."""
+        if hours <= 0:
+            await ctx.send("Hours must be greater than 0.")
+            return
+        async with self.config.guild(ctx.guild).settings() as settings:
+            settings["work_cooldown_hours"] = float(hours)
+        await ctx.send(f"Set work cooldown to {hours} hours.")
+
+    @lifesim_settings_group.command(name="setsleepcooldown")
+    async def lifesim_settings_setsleepcooldown(self, ctx, hours: float):
+        """Set how often sleep can be used."""
+        if hours <= 0:
+            await ctx.send("Hours must be greater than 0.")
+            return
+        async with self.config.guild(ctx.guild).settings() as settings:
+            settings["sleep_cooldown_hours"] = float(hours)
+        await ctx.send(f"Set sleep cooldown to {hours} hours.")
 
     @lifesim_settings_group.command(name="setupkeep")
     async def lifesim_settings_setupkeep(self, ctx, hours: float):

@@ -9,6 +9,7 @@ LifeSim is a Red Discord bot cog that simulates a small life economy using Red b
 - Buy and live in houses with upkeep and bonuses
 - Track hunger, energy, happiness, and career XP
 - Edit jobs, foods, houses, and tuning values inside Discord
+- Work every 4 hours by default
 - Sleep once per day with an 8-hour LifeSim command lockout
 - Rest every 2 hours
 
@@ -27,6 +28,7 @@ LifeSim is a Red Discord bot cog that simulates a small life economy using Red b
 - `[p]lifesim shop admin add|edit|remove|resetdefaults`
 - `[p]lifesim house admin add|edit|remove|resetdefaults`
 - `[p]lifesim settings view|setstarting|setdecay|setrest|setrestcooldown|setupkeep|resetdefaults`
+- `[p]lifesim settings setworkcooldown|setsleepcooldown`
 - `[p]lifesim member set`
 - `[p]lifesim member cooldowns reset`
 

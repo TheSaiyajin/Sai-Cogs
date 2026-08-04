@@ -460,8 +460,12 @@ class LifeSim(commands.Cog):
     @commands.guild_only()
     async def lifesim_group(self, ctx):
         """Manage and play the LifeSim game."""
-        if not await self._require_active_state(ctx):
-            return
+        invoked = ctx.invoked_subcommand
+        if invoked is not None and getattr(invoked, "name", "") == "commands":
+            pass
+        else:
+            if not await self._require_active_state(ctx):
+                return
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
@@ -484,6 +488,41 @@ class LifeSim(commands.Cog):
         guild_data = await self._get_guild_data(ctx.guild)
         embed = await self._build_profile_embed(member, guild_data)
         await ctx.send(embed=embed)
+
+    @lifesim_group.command(name="commands", aliases=["cmds", "listcommands"])
+    async def lifesim_commands(self, ctx):
+        """Show all LifeSim commands, separated by regular and admin use."""
+        lines = [
+            "**Regular commands**",
+            "- `[p]lifesim profile [member]`",
+            "- `[p]lifesim status [member]`",
+            "- `[p]lifesim work`",
+            "- `[p]lifesim rest`",
+            "- `[p]lifesim sleep`",
+            "- `[p]lifesim jobs list`",
+            "- `[p]lifesim jobs info <job>`",
+            "- `[p]lifesim jobs apply <job>`",
+            "- `[p]lifesim jobs clear`",
+            "- `[p]lifesim shop list`",
+            "- `[p]lifesim shop info <item>`",
+            "- `[p]lifesim shop buy <item> [quantity]`",
+            "- `[p]lifesim inventory`",
+            "- `[p]lifesim eat <item> [quantity]`",
+            "- `[p]lifesim house list`",
+            "- `[p]lifesim house info <house>`",
+            "- `[p]lifesim house buy <house>`",
+            "- `[p]lifesim house current`",
+            "",
+            "**Admin commands**",
+            "- `[p]lifesim jobs admin add|edit|remove|resetdefaults`",
+            "- `[p]lifesim shop admin add|edit|remove|resetdefaults`",
+            "- `[p]lifesim house admin add|edit|remove|resetdefaults`",
+            "- `[p]lifesim settings view|setstarting|setdecay|setrest|setrestcooldown|setworkcooldown|setsleepcooldown|setupkeep|resetdefaults`",
+            "- `[p]lifesim member set <member> <hunger|energy|happiness|xp|job|house> <value>`",
+            "- `[p]lifesim member cooldowns reset <member>`",
+        ]
+        for page in pagify("\n".join(lines), page_length=1900):
+            await ctx.send(page)
 
     @lifesim_group.command(name="work")
     async def lifesim_work(self, ctx):

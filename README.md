@@ -40,6 +40,7 @@ For vote role rewards:
 ## LifeSim Commands
 - `[p]lifesim profile [member]`
 - `[p]lifesim status [member]`
+- `[p]lifesim commands`
 - `[p]lifesim work`
 - `[p]lifesim rest`
 - `[p]lifesim sleep`

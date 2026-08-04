@@ -21,6 +21,7 @@ LifeSim is a Red Discord bot cog that simulates a small life economy using Red b
 4. Apply for a job: `[p]lifesim jobs apply freelance`
 5. Work: `[p]lifesim work`
 6. Sleep: `[p]lifesim sleep`
+7. See everything: `[p]lifesim commands`
 
 ## Admin Tools
 

@@ -1248,6 +1248,16 @@ class MarketTrade(commands.Cog):
            inline=False
        )
 
+       # Shop
+       embed.add_field(
+           name="**Shop**",
+           value="`shop` - Browse mystery asset packs\n"
+                 "`shop small` - Buy Small pack (100 credits)\n"
+                 "`shop medium` - Buy Medium pack (1,000 credits)\n"
+                 "`shop large` - Buy Large pack (10,000 credits)",
+           inline=False
+       )
+
        # Leaderboards
        embed.add_field(
            name="**Leaderboards**",
@@ -1303,6 +1313,16 @@ class MarketTrade(commands.Cog):
                  "`portfolio [member]` - View holdings and value\n"
                  "`prices` - Show current asset prices\n"
                  "`graph <symbol> [window]` - Show price graph (`30m`, `6h`, max `24h`)",
+           inline=False
+       )
+
+       # Shop
+       embed.add_field(
+           name="**Shop**",
+           value="`shop` - Browse mystery asset packs\n"
+                 "`shop small` - Buy Small pack (100 credits)\n"
+                 "`shop medium` - Buy Medium pack (1,000 credits)\n"
+                 "`shop large` - Buy Large pack (10,000 credits)",
            inline=False
        )
 
@@ -1885,6 +1905,153 @@ class MarketTrade(commands.Cog):
             f"Sold {quantity_int} `{normalized_symbol}` for {humanize_number(total_gain)} credits. "
             f"Realized P/L: {humanize_number(realized_change)} credits."
         )
+
+    SHOP_PACKS = {
+        "small": {"price": 100, "min_ratio": 0.50, "max_ratio": 1.05},
+        "medium": {"price": 1000, "min_ratio": 0.50, "max_ratio": 1.05},
+        "large": {"price": 10000, "min_ratio": 0.50, "max_ratio": 1.05},
+    }
+
+    @market.group(name="shop", case_insensitive=True, autohelp=False)
+    async def market_shop(self, ctx):
+        """Buy mystery asset packs from the shop."""
+        if ctx.invoked_subcommand is None:
+            embed = discord.Embed(
+                title="Mystery Asset Pack Shop",
+                description="Buy a mystery pack to receive random market assets!",
+                color=discord.Color.purple(),
+            )
+            embed.add_field(
+                name="Available Packs",
+                value=(
+                    "`shop small` — **100 credits** — reward value 50–105 credits\n"
+                    "`shop medium` — **1,000 credits** — reward value 500–1,050 credits\n"
+                    "`shop large` — **10,000 credits** — reward value 5,000–10,500 credits"
+                ),
+                inline=False,
+            )
+            embed.set_footer(text="You may gain or lose credits. Max profit: +5%.")
+            await ctx.send(embed=embed)
+
+    async def _open_mystery_pack(self, ctx, tier: str):
+        pack = self.SHOP_PACKS[tier]
+        price = pack["price"]
+        min_ratio = pack["min_ratio"]
+        max_ratio = pack["max_ratio"]
+
+        if not await bank.can_spend(ctx.author, price):
+            balance = await bank.get_balance(ctx.author)
+            await ctx.send(
+                f"You need **{humanize_number(price)} credits** to buy this pack "
+                f"but only have **{humanize_number(balance)} credits**."
+            )
+            return
+
+        assets = await self._get_assets(ctx.guild)
+        available_symbols = [sym for sym, data in assets.items() if float(data["price"]) > 0]
+        if not available_symbols:
+            await ctx.send("There are no available assets in the market right now.")
+            return
+
+        min_reward = int(price * min_ratio)
+        max_reward = int(price * max_ratio)
+
+        # Build a randomized selection of assets whose total value lands in [min_reward, max_reward]
+        selected = {}  # symbol -> quantity
+        budget_remaining = random.randint(min_reward, max_reward)
+        shuffled = available_symbols[:]
+        random.shuffle(shuffled)
+
+        for symbol in shuffled:
+            asset_price = float(assets[symbol]["price"])
+            if asset_price <= 0:
+                continue
+            max_qty = int(budget_remaining / asset_price)
+            if max_qty <= 0:
+                continue
+            qty = random.randint(1, max(1, max_qty))
+            value = int(round(asset_price * qty))
+            if value > budget_remaining:
+                qty = max(1, int(budget_remaining / asset_price))
+                value = int(round(asset_price * qty))
+            if value <= 0:
+                continue
+            selected[symbol] = selected.get(symbol, 0) + qty
+            budget_remaining -= value
+            if budget_remaining <= 0:
+                break
+
+        if not selected:
+            # Fallback: give at least 1 unit of a random asset
+            symbol = random.choice(shuffled)
+            selected[symbol] = 1
+
+        # Calculate true total reward value
+        total_reward = sum(
+            int(round(float(assets[sym]["price"]) * qty))
+            for sym, qty in selected.items()
+        )
+
+        # Deduct credits
+        await bank.withdraw_credits(ctx.author, price)
+
+        # Credit holdings and update cost basis at current market price
+        member_conf = self.config.member(ctx.author)
+        async with member_conf.holdings() as holdings, member_conf.cost_basis() as cost_basis:
+            for symbol, qty in selected.items():
+                asset_price = float(assets[symbol]["price"])
+                current_amount = int(holdings.get(symbol, 0))
+                current_avg = float(cost_basis.get(symbol, asset_price))
+                new_amount = current_amount + qty
+                holdings[symbol] = new_amount
+                if new_amount > 0:
+                    total_basis = (current_amount * current_avg) + (qty * asset_price)
+                    cost_basis[symbol] = round(total_basis / new_amount, 4)
+
+        # Build response embed
+        profit_loss = total_reward - price
+        pl_pct = (profit_loss / price) * 100
+
+        tier_labels = {"small": "Small", "medium": "Medium", "large": "Large"}
+        embed = discord.Embed(
+            title=f"🎁 Mystery Asset Pack — {tier_labels[tier]}",
+            color=discord.Color.green() if profit_loss >= 0 else discord.Color.red(),
+        )
+        embed.add_field(name="Pack Price", value=f"{humanize_number(price)} credits", inline=True)
+        embed.add_field(name="Total Reward Value", value=f"{humanize_number(total_reward)} credits", inline=True)
+        pl_sign = "+" if profit_loss >= 0 else ""
+        embed.add_field(
+            name="Profit / Loss",
+            value=f"{pl_sign}{humanize_number(profit_loss)} credits ({pl_sign}{round(pl_pct, 2)}%)",
+            inline=True,
+        )
+
+        asset_lines = []
+        for symbol, qty in selected.items():
+            asset_price = float(assets[symbol]["price"])
+            value = int(round(asset_price * qty))
+            asset_name = assets[symbol].get("name", symbol)
+            asset_lines.append(
+                f"`{symbol}` ({asset_name}): **{qty}** × {humanize_number(round(asset_price, 2))} = {humanize_number(value)} credits"
+            )
+        embed.add_field(name="Assets Received", value="\n".join(asset_lines), inline=False)
+        embed.set_footer(text=f"Pack opened by {ctx.author.display_name}")
+        await ctx.send(embed=embed)
+
+    @market_shop.command(name="small")
+    async def market_shop_small(self, ctx):
+        """Buy a Small Mystery Pack for 100 credits. Reward value: 50–105 credits."""
+        await self._open_mystery_pack(ctx, "small")
+
+    @market_shop.command(name="medium")
+    async def market_shop_medium(self, ctx):
+        """Buy a Medium Mystery Pack for 1,000 credits. Reward value: 500–1,050 credits."""
+        await self._open_mystery_pack(ctx, "medium")
+
+    @market_shop.command(name="large")
+    async def market_shop_large(self, ctx):
+        """Buy a Large Mystery Pack for 10,000 credits. Reward value: 5,000–10,500 credits."""
+        await self._open_mystery_pack(ctx, "large")
 
     @market.command(name="portfolio", aliases=["pf", "port"])
     async def market_portfolio(self, ctx, member: discord.Member = None):

@@ -80,6 +80,7 @@ For vote role rewards:
 - `[p]lifesim settings resetdefaults`
 - `[p]lifesim member set <member> <hunger|energy|happiness|xp|job|house> <value>`
 - `[p]lifesim member cooldowns reset <member>`
+- Hunger penalty: if hunger drops low, energy and happiness decay faster and work is blocked until the member eats
 
 ## Commands
 - `[p]saireply channel add #channel`

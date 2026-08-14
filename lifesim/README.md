@@ -12,6 +12,7 @@ LifeSim is a Red Discord bot cog that simulates a small life economy using Red b
 - Work every 4 hours by default
 - Sleep once per day with an 8-hour LifeSim command lockout
 - Rest every 2 hours
+- Hunger has a real effect: low hunger drains energy and happiness and blocks work until you eat
 
 ## Quick Start
 

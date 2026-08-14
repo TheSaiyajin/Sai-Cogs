@@ -267,6 +267,12 @@ class LifeSim(commands.Cog):
             hunger = self._clamp_need(hunger - (float(decay["hunger"]) * elapsed_hours))
             energy = self._clamp_need(energy - (float(decay["energy"]) * elapsed_hours))
             happiness = self._clamp_need(happiness - (float(decay["happiness"]) * elapsed_hours))
+
+            if hunger < 30:
+                starvation_ratio = (30.0 - hunger) / 30.0
+                energy = self._clamp_need(energy - (starvation_ratio * 8.0 * elapsed_hours))
+                happiness = self._clamp_need(happiness - (starvation_ratio * 5.0 * elapsed_hours))
+
             await member_conf.hunger.set(hunger)
             await member_conf.energy.set(energy)
             await member_conf.happiness.set(happiness)
@@ -551,6 +557,11 @@ class LifeSim(commands.Cog):
         hunger = float(await member_conf.hunger())
         energy = float(await member_conf.energy())
         happiness = float(await member_conf.happiness())
+
+        if hunger <= 15:
+            await ctx.send("You are too hungry to work. Eat something before heading back to the job.")
+            return
+
         required_energy = float(job["energy_cost"])
         if energy < required_energy:
             await ctx.send(

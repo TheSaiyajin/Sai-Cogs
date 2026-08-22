@@ -1,0 +1,15 @@
+{
+  "author": ["Sai"],
+  "install_msg": "Thanks for installing TradingCards. Start with `[p]tcg sets`, then refresh cache with `[p]tcgset refreshsets`.",
+  "name": "TCG",
+  "short": "Pokémon-style trading card collecting, trading, and member marketplace",
+  "description": "A Red Discord bot cog for a Pokémon TCG-inspired collection game with API-backed card data, pack opening simulation, direct member trades, and player-driven card marketplace pricing.",
+  "tags": ["economy", "game", "pokemon", "trading", "collecting"],
+  "requirements": [],
+  "required_cogs": {},
+  "min_bot_version": "3.5.0",
+  "min_python_version": [3, 8, 0],
+  "hidden": false,
+  "disabled": false,
+  "end_user_data_statement": "This cog stores per-guild game settings, set cache metadata, active trades/listings, and bounded trade/sale history, plus per-member owned card instances, unopened packs, favorites, pull stats, and counters."
+}

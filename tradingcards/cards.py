@@ -40,6 +40,10 @@ DEFAULT_MAX_OPEN = 20
 DEFAULT_TRADE_EXPIRY_MINUTES = 15
 DEFAULT_MARKET_TAX_PERCENT = 0.0
 
+# 0 means the server-wide pack purchase limit is disabled.
+DEFAULT_SERVER_PACK_LIMIT = 0
+DEFAULT_SERVER_PACK_LIMIT_WINDOW_HOURS = 24
+
 MAX_HISTORY_TRADES = 400
 MAX_HISTORY_SALES = 1200
 
@@ -300,6 +304,19 @@ def trade_is_expired(trade: Dict, now: Optional[float] = None) -> bool:
     return now_val >= float(trade.get("expires_at", 0))
 
 
+def copy_trade(trade: Dict) -> Dict:
+    """Deep-enough copy of a trade dict for snapshot/restore purposes."""
+    copied = dict(trade)
+    offers = trade.get("offers", {})
+    copied["offers"] = {
+        member_key: dict(offer) if isinstance(offer, dict) else offer for member_key, offer in offers.items()
+    }
+    for offer in copied["offers"].values():
+        if isinstance(offer, dict) and "cards" in offer:
+            offer["cards"] = list(offer["cards"])
+    return copied
+
+
 def reset_trade_confirmations(trade: Dict) -> None:
     offers = trade.get("offers", {})
     for member_key, offer in offers.items():
@@ -468,3 +485,49 @@ def simulate_atomic_credit_exchange(
     bal_b += c_a
     bal_a += c_b
     return True, (bal_a, bal_b)
+
+
+def net_credit_transfer(credits_a_to_b: int, credits_b_to_a: int) -> Tuple[str, int]:
+    """Collapse two-directional credit offers into a single net transfer.
+
+    Returns a tuple of (direction, amount) where direction is one of
+    ``"a_to_b"``, ``"b_to_a"`` or ``"none"`` and amount is always >= 0.
+    """
+    c_a = max(0, int(credits_a_to_b))
+    c_b = max(0, int(credits_b_to_a))
+    if c_a == c_b:
+        return "none", 0
+    if c_a > c_b:
+        return "a_to_b", c_a - c_b
+    return "b_to_a", c_b - c_a
+
+
+def check_server_pack_purchase_limit(
+    state: Dict, limit: int, window_hours: float, amount: int, *, now: Optional[float] = None
+) -> Tuple[bool, Dict, str]:
+    """Check and (if allowed) consume a server-wide rolling pack purchase limit.
+
+    ``state`` is the guild's ``server_pack_purchases`` dict (``window_start``,
+    ``count``). Returns (allowed, new_state, message). ``new_state`` should
+    always be persisted, even when ``allowed`` is False, so the current window
+    is not lost. When ``limit`` is 0 or less the limit is disabled and every
+    purchase is allowed without consuming any window state.
+    """
+    now_val = now if now is not None else now_ts()
+    if limit <= 0:
+        return True, dict(state), ""
+    window_seconds = max(1.0, float(window_hours) * 3600.0)
+    window_start = float(state.get("window_start", 0) or 0)
+    count = int(state.get("count", 0) or 0)
+    if now_val - window_start >= window_seconds:
+        window_start = now_val
+        count = 0
+    remaining = max(0, int(limit) - count)
+    if amount > remaining:
+        return False, {"window_start": window_start, "count": count}, (
+            f"This server's pack purchase limit for the current window is {int(limit)}. "
+            f"{count} have already been bought and only {remaining} remain, "
+            f"but this purchase requested {int(amount)}."
+        )
+    count += amount
+    return True, {"window_start": window_start, "count": count}, ""

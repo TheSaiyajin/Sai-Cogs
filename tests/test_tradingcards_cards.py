@@ -109,3 +109,49 @@ def test_weighted_roll_returns_known_tier():
     rng = random.Random(42)
     rolled = cards.roll_weighted_rare_tier(rng)
     assert rolled in {tier for tier, _weight in cards.RARE_SLOT_ODDS}
+
+
+def test_net_credit_transfer_collapses_to_single_direction():
+    assert cards.net_credit_transfer(200, 100) == ("a_to_b", 100)
+    assert cards.net_credit_transfer(100, 200) == ("b_to_a", 100)
+    assert cards.net_credit_transfer(150, 150) == ("none", 0)
+    assert cards.net_credit_transfer(0, 0) == ("none", 0)
+
+
+def test_copy_trade_is_independent_of_original():
+    trade = {
+        "trade_id": "TRD-1",
+        "offers": {"1": {"cards": ["A"], "credits": 5, "confirmed": False}},
+    }
+    snapshot = cards.copy_trade(trade)
+    trade["offers"]["1"]["cards"].append("B")
+    trade["offers"]["1"]["confirmed"] = True
+    assert snapshot["offers"]["1"]["cards"] == ["A"]
+    assert snapshot["offers"]["1"]["confirmed"] is False
+
+
+def test_server_pack_purchase_limit_disabled_when_zero():
+    state = {"window_start": 0, "count": 0}
+    allowed, new_state, message = cards.check_server_pack_purchase_limit(state, 0, 24, 500)
+    assert allowed is True
+    assert message == ""
+
+
+def test_server_pack_purchase_limit_blocks_when_exceeded():
+    state = {"window_start": 1000.0, "count": 8}
+    allowed, new_state, message = cards.check_server_pack_purchase_limit(
+        state, 10, 24, 5, now=1000.0
+    )
+    assert allowed is False
+    assert new_state == {"window_start": 1000.0, "count": 8}
+    assert "limit" in message.lower()
+
+
+def test_server_pack_purchase_limit_resets_after_window():
+    state = {"window_start": 1000.0, "count": 10}
+    allowed, new_state, message = cards.check_server_pack_purchase_limit(
+        state, 10, 24, 5, now=1000.0 + 24 * 3600 + 1
+    )
+    assert allowed is True
+    assert new_state["count"] == 5
+    assert new_state["window_start"] > 1000.0

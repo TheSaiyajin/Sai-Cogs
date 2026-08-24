@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import statistics
 import time
@@ -12,6 +13,8 @@ from redbot.core import Config, bank, commands
 from redbot.core.utils.chat_formatting import humanize_number, pagify
 
 from . import cards
+
+log = logging.getLogger("red.sai-cogs.tradingcards")
 
 
 class TradingCards(commands.Cog):
@@ -38,6 +41,9 @@ class TradingCards(commands.Cog):
             trade_expiry_minutes=cards.DEFAULT_TRADE_EXPIRY_MINUTES,
             market_tax_percent=cards.DEFAULT_MARKET_TAX_PERCENT,
             id_counters={"card": 0, "trade": 0, "listing": 0},
+            server_pack_limit=cards.DEFAULT_SERVER_PACK_LIMIT,
+            server_pack_limit_window_hours=cards.DEFAULT_SERVER_PACK_LIMIT_WINDOW_HOURS,
+            server_pack_purchases={"window_start": 0, "count": 0},
         )
         self.config.register_member(
             owned_cards={},
@@ -66,7 +72,7 @@ class TradingCards(commands.Cog):
                 for guild_id in guild_ids:
                     await self._expire_trades_for_guild(guild_id)
             except Exception as exc:
-                print(f"[TradingCards] trade expiry loop error: {exc}")
+                log.exception("trade expiry loop error")
             await asyncio.sleep(30)
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -215,23 +221,33 @@ class TradingCards(commands.Cog):
         return None
 
     async def _expire_trades_for_guild(self, guild_id: int):
+        """Acquire the guild lock and expire stale trades.
+
+        Callers that already hold the guild lock MUST use
+        ``_expire_trades_for_guild_unlocked`` instead to avoid deadlocking on
+        the non-reentrant ``asyncio.Lock``.
+        """
         lock = self._guild_lock(guild_id)
         async with lock:
-            now = cards.now_ts()
-            guild_conf = self.config.guild_from_id(guild_id)
-            active_trades = await guild_conf.active_trades()
-            if not active_trades:
-                return
-            locked_cards = await guild_conf.locked_cards()
-            changed = False
-            for trade_id, trade in list(active_trades.items()):
-                if cards.trade_is_expired(trade, now=now):
-                    self._unlock_trade_cards(locked_cards, trade_id)
-                    del active_trades[trade_id]
-                    changed = True
-            if changed:
-                await guild_conf.active_trades.set(active_trades)
-                await guild_conf.locked_cards.set(locked_cards)
+            await self._expire_trades_for_guild_unlocked(guild_id)
+
+    async def _expire_trades_for_guild_unlocked(self, guild_id: int):
+        """Expire stale trades. The caller must already hold the guild lock."""
+        now = cards.now_ts()
+        guild_conf = self.config.guild_from_id(guild_id)
+        active_trades = await guild_conf.active_trades()
+        if not active_trades:
+            return
+        locked_cards = await guild_conf.locked_cards()
+        changed = False
+        for trade_id, trade in list(active_trades.items()):
+            if cards.trade_is_expired(trade, now=now):
+                self._unlock_trade_cards(locked_cards, trade_id)
+                del active_trades[trade_id]
+                changed = True
+        if changed:
+            await guild_conf.active_trades.set(active_trades)
+            await guild_conf.locked_cards.set(locked_cards)
 
     def _unlock_trade_cards(self, locked_cards: Dict, trade_id: str):
         for instance_id, lock in list(locked_cards.items()):
@@ -557,15 +573,43 @@ class TradingCards(commands.Cog):
                     f"You need {humanize_number(total_cost)} credits, but your balance is too low."
                 )
                 return
-            await bank.withdraw_credits(ctx.author, total_cost)
+
+            server_pack_limit = int(await guild_conf.server_pack_limit())
+            server_pack_limit_window_hours = float(await guild_conf.server_pack_limit_window_hours())
+            server_pack_state_before = await guild_conf.server_pack_purchases()
+            allowed, new_server_pack_state, limit_message = cards.check_server_pack_purchase_limit(
+                server_pack_state_before, server_pack_limit, server_pack_limit_window_hours, amount
+            )
+            if not allowed:
+                await ctx.send(limit_message)
+                return
+
+            # --- Snapshot phase ---
             member_conf = self.config.member(ctx.author)
-            packs = await member_conf.packs()
+            packs_before = await member_conf.packs()
+            packs = dict(packs_before)
             packs[set_id] = int(packs.get(set_id, 0)) + amount
+
+            withdraw_done = False
+            packs_saved = False
+            server_state_saved = False
             try:
+                await bank.withdraw_credits(ctx.author, total_cost)
+                withdraw_done = True
                 await member_conf.packs.set(packs)
+                packs_saved = True
+                await guild_conf.server_pack_purchases.set(new_server_pack_state)
+                server_state_saved = True
             except Exception as exc:
-                await bank.deposit_credits(ctx.author, total_cost)
-                await ctx.send(f"Purchase failed while saving data: {exc}")
+                if packs_saved:
+                    await member_conf.packs.set(packs_before)
+                if server_state_saved:
+                    await guild_conf.server_pack_purchases.set(server_pack_state_before)
+                if withdraw_done:
+                    await bank.deposit_credits(ctx.author, total_cost)
+                await ctx.send(
+                    f"Purchase failed and was rolled back: {exc}. No credits were charged."
+                )
                 return
         await ctx.send(
             f"You bought **{amount}** `{set_id}` pack(s) for **{humanize_number(total_cost)}** credits."
@@ -592,10 +636,17 @@ class TradingCards(commands.Cog):
 
     @tcg.command(name="open")
     @commands.cooldown(1, 8, commands.BucketType.member)
-    async def tcg_open(self, ctx: commands.Context, set_token: str, amount: int = 1):
-        """Open your packs and collect cards."""
-        if amount <= 0:
-            await ctx.send("Amount must be greater than 0.")
+    async def tcg_open(self, ctx: commands.Context, set_token: str, amount: Optional[int] = None):
+        """Open one unopened pack and collect its cards.
+
+        Packs can only be opened one at a time. Passing an amount other than
+        1 is no longer supported and will not open any packs.
+        """
+        if amount is not None and amount != 1:
+            await ctx.send(
+                "Packs can only be opened one at a time now. "
+                f"Use `{ctx.clean_prefix}tcg open {set_token}` (no amount) to open a single pack."
+            )
             return
         set_id = self._resolve_set_token(set_token)
         if not set_id:
@@ -608,121 +659,135 @@ class TradingCards(commands.Cog):
                     "Set data is unavailable. The API may be down and no cache is currently available."
                 )
                 return
-            guild_conf = self.config.guild(ctx.guild)
-            max_open = int(await guild_conf.max_open())
-            if amount > max_open:
-                await ctx.send(f"You can open at most {max_open} packs per command.")
-                return
-
             member_conf = self.config.member(ctx.author)
-            packs = await member_conf.packs()
-            owned_packs = int(packs.get(set_id, 0))
-            if owned_packs < amount:
-                await ctx.send(
-                    f"You only have {owned_packs} unopened `{set_id}` pack(s)."
-                )
+            packs_before = await member_conf.packs()
+            owned_packs = int(packs_before.get(set_id, 0))
+            if owned_packs < 1:
+                await ctx.send(f"You do not have any unopened `{set_id}` pack(s).")
                 return
 
-            owned_cards = await member_conf.owned_cards()
-            pull_stats = await member_conf.pull_stats()
-            pack_result_pages: List[discord.Embed] = []
-            special_hits = 0
+            # --- Snapshot phase: every piece of member state this command may
+            # touch is captured up-front so it can be restored exactly if any
+            # step below fails. ---
+            owned_cards_before = await member_conf.owned_cards()
+            pull_stats_before = await member_conf.pull_stats()
+            packs_opened_before = int(await member_conf.packs_opened_count())
 
-            for pack_index in range(amount):
-                try:
-                    pulled_cards, metadata = await self._pull_pack_cards(ctx.guild.id, set_id)
-                except RuntimeError as exc:
-                    await ctx.send(f"Could not open packs: {exc}")
-                    return
-                added_instances: List[Dict] = []
-                for pulled in pulled_cards:
-                    instance_id = await self._next_card_instance_id(ctx.guild.id)
-                    instance = {
-                        "instance_id": instance_id,
-                        "api_card_id": pulled["api_card_id"],
-                        "name": pulled["name"],
-                        "set_id": pulled["set_id"],
-                        "set_name": pulled["set_name"],
-                        "set_number": pulled["set_number"],
-                        "printed_number": pulled["printed_number"],
-                        "rarity": pulled["rarity"],
-                        "finish": pulled["finish"],
-                        "small_image": pulled["small_image"],
-                        "large_image": pulled["large_image"],
-                        "api_url": pulled["api_url"],
-                        "artist": pulled["artist"],
-                        "pull_timestamp": cards.now_ts(),
-                        "original_puller_id": ctx.author.id,
-                        "current_owner_id": ctx.author.id,
-                    }
-                    owned_cards[instance_id] = instance
-                    added_instances.append(instance)
-                reverse_count = sum(1 for card_instance in added_instances if card_instance["finish"] == "Reverse Holo")
-                high_rarity_count = cards.high_rarity_pull_count(added_instances)
-                pull_stats["total_pulls"] = int(pull_stats.get("total_pulls", 0)) + len(added_instances)
-                pull_stats["reverse_pulls"] = int(pull_stats.get("reverse_pulls", 0)) + reverse_count
-                pull_stats["high_rarity_pulls"] = int(pull_stats.get("high_rarity_pulls", 0)) + high_rarity_count
+            try:
+                pulled_cards, metadata = await self._pull_pack_cards(ctx.guild.id, set_id)
+            except RuntimeError as exc:
+                await ctx.send(f"Could not open pack: {exc}. No packs were consumed.")
+                return
 
-                tier = str(metadata.get("rare_tier"))
-                if tier in {"ultra_rare", "special_illustration_rare", "hyper_rare"}:
-                    special_hits += 1
-                best_pull = max(
-                    added_instances,
-                    key=lambda ci: cards.RARE_TIER_ORDER.index(
-                        cards.map_rarity_to_rare_tier(ci.get("rarity")) or "regular_or_holo"
-                    ),
-                )
-                embed = discord.Embed(
-                    title=f"{cards.set_display_name(set_id)} Pack {pack_index + 1}/{amount}",
-                    description=(
-                        "Odds are simulated for gameplay and are not official Pokémon Company pull odds.\n"
-                        f"Energy slot: **{metadata['energy']}** (display only, not collectible)"
-                    ),
-                    color=discord.Color.green(),
-                )
-                normal_lines = [
-                    cards.format_card_line(ci)
-                    for ci in added_instances
-                    if ci["finish"] != "Reverse Holo"
-                    and (cards.map_rarity_to_rare_tier(ci.get("rarity")) or "regular_or_holo") == "regular_or_holo"
-                ]
-                highlight_lines = [
-                    cards.format_card_line(ci)
-                    for ci in added_instances
-                    if ci["finish"] == "Reverse Holo"
-                    or (cards.map_rarity_to_rare_tier(ci.get("rarity")) or "regular_or_holo") != "regular_or_holo"
-                ]
-                embed.add_field(
-                    name="Normal Pulls",
-                    value="\n".join(normal_lines[:12]) or "None",
-                    inline=False,
-                )
-                embed.add_field(
-                    name="Highlights",
-                    value="\n".join(highlight_lines[:12]) or "None",
-                    inline=False,
-                )
-                if best_pull.get("large_image"):
-                    embed.set_image(url=best_pull["large_image"])
-                pack_result_pages.append(embed)
+            owned_cards = dict(owned_cards_before)
+            pull_stats = dict(pull_stats_before)
+            packs = dict(packs_before)
 
-            packs[set_id] = owned_packs - amount
+            added_instances: List[Dict] = []
+            for pulled in pulled_cards:
+                instance_id = await self._next_card_instance_id(ctx.guild.id)
+                instance = {
+                    "instance_id": instance_id,
+                    "api_card_id": pulled["api_card_id"],
+                    "name": pulled["name"],
+                    "set_id": pulled["set_id"],
+                    "set_name": pulled["set_name"],
+                    "set_number": pulled["set_number"],
+                    "printed_number": pulled["printed_number"],
+                    "rarity": pulled["rarity"],
+                    "finish": pulled["finish"],
+                    "small_image": pulled["small_image"],
+                    "large_image": pulled["large_image"],
+                    "api_url": pulled["api_url"],
+                    "artist": pulled["artist"],
+                    "pull_timestamp": cards.now_ts(),
+                    "original_puller_id": ctx.author.id,
+                    "current_owner_id": ctx.author.id,
+                }
+                owned_cards[instance_id] = instance
+                added_instances.append(instance)
+            reverse_count = sum(1 for card_instance in added_instances if card_instance["finish"] == "Reverse Holo")
+            high_rarity_count = cards.high_rarity_pull_count(added_instances)
+            pull_stats["total_pulls"] = int(pull_stats.get("total_pulls", 0)) + len(added_instances)
+            pull_stats["reverse_pulls"] = int(pull_stats.get("reverse_pulls", 0)) + reverse_count
+            pull_stats["high_rarity_pulls"] = int(pull_stats.get("high_rarity_pulls", 0)) + high_rarity_count
+
+            tier = str(metadata.get("rare_tier"))
+            special_hit = tier in {"ultra_rare", "special_illustration_rare", "hyper_rare"}
+            best_pull = max(
+                added_instances,
+                key=lambda ci: cards.RARE_TIER_ORDER.index(
+                    cards.map_rarity_to_rare_tier(ci.get("rarity")) or "regular_or_holo"
+                ),
+            )
+            embed = discord.Embed(
+                title=f"{cards.set_display_name(set_id)} Pack",
+                description=(
+                    "Odds are simulated for gameplay and are not official Pokémon Company pull odds.\n"
+                    f"Energy slot: **{metadata['energy']}** (display only, not collectible)"
+                ),
+                color=discord.Color.green(),
+            )
+            normal_lines = [
+                cards.format_card_line(ci)
+                for ci in added_instances
+                if ci["finish"] != "Reverse Holo"
+                and (cards.map_rarity_to_rare_tier(ci.get("rarity")) or "regular_or_holo") == "regular_or_holo"
+            ]
+            highlight_lines = [
+                cards.format_card_line(ci)
+                for ci in added_instances
+                if ci["finish"] == "Reverse Holo"
+                or (cards.map_rarity_to_rare_tier(ci.get("rarity")) or "regular_or_holo") != "regular_or_holo"
+            ]
+            embed.add_field(
+                name="Normal Pulls",
+                value="\n".join(normal_lines[:12]) or "None",
+                inline=False,
+            )
+            embed.add_field(
+                name="Highlights",
+                value="\n".join(highlight_lines[:12]) or "None",
+                inline=False,
+            )
+            if best_pull.get("large_image"):
+                embed.set_image(url=best_pull["large_image"])
+
+            packs[set_id] = owned_packs - 1
             if packs[set_id] <= 0:
                 packs.pop(set_id, None)
 
+            owned_cards_saved = False
+            packs_saved = False
+            pull_stats_saved = False
+            packs_opened_saved = False
             try:
                 await member_conf.owned_cards.set(owned_cards)
+                owned_cards_saved = True
                 await member_conf.packs.set(packs)
+                packs_saved = True
                 await member_conf.pull_stats.set(pull_stats)
-                await member_conf.packs_opened_count.set(int(await member_conf.packs_opened_count()) + amount)
+                pull_stats_saved = True
+                await member_conf.packs_opened_count.set(packs_opened_before + 1)
+                packs_opened_saved = True
             except Exception as exc:
-                await ctx.send(f"Pack opening failed while saving data: {exc}. No packs were consumed.")
+                if packs_opened_saved:
+                    await member_conf.packs_opened_count.set(packs_opened_before)
+                if pull_stats_saved:
+                    await member_conf.pull_stats.set(pull_stats_before)
+                if packs_saved:
+                    await member_conf.packs.set(packs_before)
+                if owned_cards_saved:
+                    await member_conf.owned_cards.set(owned_cards_before)
+                await ctx.send(
+                    f"Pack opening failed and was fully rolled back: {exc}. "
+                    "Your pack, cards, and stats were restored to their prior state."
+                )
                 return
 
-        for embed in pack_result_pages:
-            await ctx.send(embed=embed)
-        if special_hits:
-            await ctx.send(f"🎉 Incredible luck! You hit **{special_hits}** unusually rare pull(s).")
+        await ctx.send(embed=embed)
+        if special_hit:
+            await ctx.send("🎉 Incredible luck! You hit an unusually rare pull.")
 
     @tcg.command(name="collection")
     async def tcg_collection(self, ctx: commands.Context, member: Optional[discord.Member] = None):
@@ -946,7 +1011,7 @@ class TradingCards(commands.Cog):
             return
         lock = self._guild_lock(ctx.guild.id)
         async with lock:
-            await self._expire_trades_for_guild(ctx.guild.id)
+            await self._expire_trades_for_guild_unlocked(ctx.guild.id)
             your_trade_id, _ = await self._find_member_trade(ctx.guild.id, ctx.author.id)
             their_trade_id, _ = await self._find_member_trade(ctx.guild.id, member.id)
             if your_trade_id:
@@ -1176,6 +1241,16 @@ class TradingCards(commands.Cog):
                 await ctx.send(f"{member_b.display_name} no longer has enough credits.")
                 return
 
+            # --- Snapshot phase: capture everything the transaction may mutate so we
+            # can restore it exactly if any step below fails. ---
+            balance_a_before = await bank.get_balance(member_a)
+            balance_b_before = await bank.get_balance(member_b)
+            cards_a_before = dict(cards_a)
+            cards_b_before = dict(cards_b)
+            trade_before = cards.copy_trade(trade)
+            completed_a_before = int(await conf_a.completed_trade_count())
+            completed_b_before = int(await conf_b.completed_trade_count())
+
             updated_a = dict(cards_a)
             updated_b = dict(cards_b)
             for instance_id in offer_a.get("cards", []):
@@ -1185,42 +1260,91 @@ class TradingCards(commands.Cog):
                 moved = cards.move_card_instance(updated_b.pop(instance_id), member_a.id)
                 updated_a[instance_id] = moved
 
-            withdrawals: List[Tuple[discord.Member, int]] = []
-            credit_ok = False
+            # Collapse the two-directional credit offers into a single net transfer
+            # instead of performing up to four separate bank operations.
+            direction, net_amount = cards.net_credit_transfer(credits_a, credits_b)
+            net_from = member_a if direction == "a_to_b" else (member_b if direction == "b_to_a" else None)
+            net_to = member_b if direction == "a_to_b" else (member_a if direction == "b_to_a" else None)
+
+            credit_withdrawn = False
+            credit_deposited = False
+            cards_a_saved = False
+            cards_b_saved = False
+            completed_a_saved = False
+            completed_b_saved = False
             try:
-                if credits_a > 0:
-                    await bank.withdraw_credits(member_a, credits_a)
-                    withdrawals.append((member_a, credits_a))
-                if credits_b > 0:
-                    await bank.withdraw_credits(member_b, credits_b)
-                    withdrawals.append((member_b, credits_b))
-                if credits_a > 0:
-                    await bank.deposit_credits(member_b, credits_a)
-                if credits_b > 0:
-                    await bank.deposit_credits(member_a, credits_b)
-                credit_ok = True
-            except Exception as exc:
-                for credited_member, amount in withdrawals:
-                    await bank.deposit_credits(credited_member, amount)
-                await ctx.send(f"Trade failed while transferring credits: {exc}")
-                return
-            if not credit_ok:
-                await ctx.send("Trade failed while transferring credits.")
-                return
-            try:
+                if net_amount > 0:
+                    if not await bank.can_spend(net_from, net_amount):
+                        cards.reset_trade_confirmations(trade)
+                        active_trades = await self.config.guild(ctx.guild).active_trades()
+                        active_trades[trade_id] = trade
+                        await self.config.guild(ctx.guild).active_trades.set(active_trades)
+                        await ctx.send(f"{net_from.display_name} no longer has enough credits.")
+                        return
+                    await bank.withdraw_credits(net_from, net_amount)
+                    credit_withdrawn = True
+                    await bank.deposit_credits(net_to, net_amount)
+                    credit_deposited = True
+
                 await conf_a.owned_cards.set(updated_a)
+                cards_a_saved = True
                 await conf_b.owned_cards.set(updated_b)
-                await conf_a.completed_trade_count.set(int(await conf_a.completed_trade_count()) + 1)
-                await conf_b.completed_trade_count.set(int(await conf_b.completed_trade_count()) + 1)
+                cards_b_saved = True
+                await conf_a.completed_trade_count.set(completed_a_before + 1)
+                completed_a_saved = True
+                await conf_b.completed_trade_count.set(completed_b_before + 1)
+                completed_b_saved = True
             except Exception as exc:
-                if credits_a > 0:
-                    await bank.withdraw_credits(member_b, credits_a)
-                    await bank.deposit_credits(member_a, credits_a)
-                if credits_b > 0:
-                    await bank.withdraw_credits(member_a, credits_b)
-                    await bank.deposit_credits(member_b, credits_b)
-                await ctx.send(f"Trade failed while saving ownership data: {exc}")
+                # Restore state in the reverse order it was mutated.
+                if cards_b_saved:
+                    await conf_b.owned_cards.set(cards_b_before)
+                if cards_a_saved:
+                    await conf_a.owned_cards.set(cards_a_before)
+                if completed_a_saved:
+                    await conf_a.completed_trade_count.set(completed_a_before)
+                if completed_b_saved:
+                    await conf_b.completed_trade_count.set(completed_b_before)
+                if credit_deposited:
+                    reclaim_failed = False
+                    try:
+                        await bank.withdraw_credits(net_to, net_amount)
+                    except Exception:
+                        reclaim_failed = True
+                    if not reclaim_failed:
+                        await bank.deposit_credits(net_from, net_amount)
+                    else:
+                        log.critical(
+                            "Failed to reclaim %s credits from %s while rolling back trade %s; "
+                            "funds may be duplicated.",
+                            net_amount,
+                            net_to,
+                            trade_id,
+                        )
+                elif credit_withdrawn:
+                    await bank.deposit_credits(net_from, net_amount)
+                cards.reset_trade_confirmations(trade)
+                active_trades = await self.config.guild(ctx.guild).active_trades()
+                active_trades[trade_id] = trade_before
+                await self.config.guild(ctx.guild).active_trades.set(active_trades)
+                await ctx.send(
+                    f"Trade failed and was rolled back: {exc}. No credits or cards were exchanged."
+                )
                 return
+
+            balance_a_after = await bank.get_balance(member_a)
+            balance_b_after = await bank.get_balance(member_b)
+            if net_amount > 0:
+                expected_a = balance_a_before - (net_amount if net_from is member_a else -net_amount)
+                expected_b = balance_b_before - (net_amount if net_from is member_b else -net_amount)
+                if balance_a_after != expected_a or balance_b_after != expected_b:
+                    log.warning(
+                        "Post-trade balance mismatch for trade %s: expected (%s, %s) got (%s, %s)",
+                        trade_id,
+                        expected_a,
+                        expected_b,
+                        balance_a_after,
+                        balance_b_after,
+                    )
 
             guild_conf = self.config.guild(ctx.guild)
             active_trades = await guild_conf.active_trades()
@@ -1380,7 +1504,20 @@ class TradingCards(commands.Cog):
             card_instance = seller_cards.get(instance_id)
             lock_data = await guild_conf.locked_cards()
             lock_info = lock_data.get(instance_id)
-            if not card_instance or not lock_info or lock_info.get("ref_id") != listing_id:
+
+            # Full listing validity re-check immediately before purchase, per spec:
+            # listing exists, seller still owns the card, current_owner_id matches
+            # seller, lock exists with lock_type == "market", owner_id == seller_id,
+            # and ref_id == listing_id.
+            listing_valid = (
+                bool(card_instance)
+                and int(card_instance.get("current_owner_id", 0)) == seller_id
+                and bool(lock_info)
+                and str(lock_info.get("lock_type")) == "market"
+                and int(lock_info.get("owner_id", 0)) == seller_id
+                and str(lock_info.get("ref_id")) == str(listing_id)
+            )
+            if not listing_valid:
                 self._unlock_listing_card(lock_data, listing_id)
                 active_listings.pop(listing_id, None)
                 await guild_conf.locked_cards.set(lock_data)
@@ -1396,55 +1533,88 @@ class TradingCards(commands.Cog):
                 return
             tax_percent = float(await guild_conf.market_tax_percent())
             tax_amount, seller_payout = cards.calculate_market_tax(price, tax_percent)
+
+            # --- Snapshot phase ---
+            buyer_conf = self.config.member(ctx.author)
+            buyer_cards_before = await buyer_conf.owned_cards()
+            seller_cards_before = dict(seller_cards)
+            active_listings_before = dict(active_listings)
+            lock_data_before = dict(lock_data)
+
             withdraw_done = False
+            deposit_done = False
+            seller_cards_saved = False
+            buyer_cards_saved = False
             try:
                 await bank.withdraw_credits(ctx.author, price)
                 withdraw_done = True
                 await bank.deposit_credits(seller, seller_payout)
-            except Exception as exc:
-                if withdraw_done:
-                    await bank.deposit_credits(ctx.author, price)
-                await ctx.send(f"Purchase failed while transferring credits: {exc}")
-                return
+                deposit_done = True
 
-            buyer_conf = self.config.member(ctx.author)
-            buyer_cards = await buyer_conf.owned_cards()
-            moved = cards.move_card_instance(card_instance, ctx.author.id)
-            seller_cards.pop(instance_id, None)
-            buyer_cards[instance_id] = moved
-            try:
-                await seller_conf.owned_cards.set(seller_cards)
+                buyer_cards = dict(buyer_cards_before)
+                seller_cards_updated = dict(seller_cards_before)
+                moved = cards.move_card_instance(seller_cards_updated.pop(instance_id), ctx.author.id)
+                buyer_cards[instance_id] = moved
+
+                await seller_conf.owned_cards.set(seller_cards_updated)
+                seller_cards_saved = True
                 await buyer_conf.owned_cards.set(buyer_cards)
-            except Exception as exc:
-                await bank.withdraw_credits(seller, seller_payout)
-                await bank.deposit_credits(ctx.author, price)
-                await ctx.send(f"Purchase failed while saving ownership: {exc}")
-                return
+                buyer_cards_saved = True
 
-            active_listings.pop(listing_id, None)
-            cards.unlock_card(lock_data, instance_id, lock_type="market", ref_id=listing_id)
-            market_history = await guild_conf.market_history()
-            cards.append_bounded(
-                market_history,
-                {
-                    "listing_id": listing_id,
-                    "card_instance_id": instance_id,
-                    "card_name": listing.get("card_name"),
-                    "set_id": listing.get("set_id"),
-                    "rarity": listing.get("rarity"),
-                    "finish": listing.get("finish"),
-                    "price": price,
-                    "tax": tax_amount,
-                    "seller_payout": seller_payout,
-                    "seller_id": seller.id,
-                    "buyer_id": ctx.author.id,
-                    "sold_at": cards.now_ts(),
-                },
-                cards.MAX_HISTORY_SALES,
-            )
-            await guild_conf.active_listings.set(active_listings)
-            await guild_conf.locked_cards.set(lock_data)
-            await guild_conf.market_history.set(market_history)
+                active_listings.pop(listing_id, None)
+                cards.unlock_card(lock_data, instance_id, lock_type="market", ref_id=listing_id)
+                market_history = await guild_conf.market_history()
+                cards.append_bounded(
+                    market_history,
+                    {
+                        "listing_id": listing_id,
+                        "card_instance_id": instance_id,
+                        "card_name": listing.get("card_name"),
+                        "set_id": listing.get("set_id"),
+                        "rarity": listing.get("rarity"),
+                        "finish": listing.get("finish"),
+                        "price": price,
+                        "tax": tax_amount,
+                        "seller_payout": seller_payout,
+                        "seller_id": seller.id,
+                        "buyer_id": ctx.author.id,
+                        "sold_at": cards.now_ts(),
+                    },
+                    cards.MAX_HISTORY_SALES,
+                )
+                await guild_conf.active_listings.set(active_listings)
+                await guild_conf.locked_cards.set(lock_data)
+                await guild_conf.market_history.set(market_history)
+            except Exception as exc:
+                # Restore ownership state exactly as it was before this purchase.
+                if buyer_cards_saved:
+                    await buyer_conf.owned_cards.set(buyer_cards_before)
+                if seller_cards_saved:
+                    await seller_conf.owned_cards.set(seller_cards_before)
+                await guild_conf.active_listings.set(active_listings_before)
+                await guild_conf.locked_cards.set(lock_data_before)
+                if deposit_done:
+                    reclaim_failed = False
+                    try:
+                        await bank.withdraw_credits(seller, seller_payout)
+                    except Exception:
+                        reclaim_failed = True
+                    if not reclaim_failed:
+                        await bank.deposit_credits(ctx.author, price)
+                    else:
+                        log.critical(
+                            "Failed to reclaim %s credits from seller %s while rolling back "
+                            "purchase of listing %s; funds may be duplicated.",
+                            seller_payout,
+                            seller.id,
+                            listing_id,
+                        )
+                elif withdraw_done:
+                    await bank.deposit_credits(ctx.author, price)
+                await ctx.send(
+                    f"Purchase failed and was rolled back: {exc}. No credits or cards were exchanged."
+                )
+                return
         await ctx.send(
             f"✅ Purchased `{listing_id}` for **{humanize_number(price)}** credits "
             f"(tax: {humanize_number(tax_amount)}, seller received {humanize_number(seller_payout)})."
@@ -1689,11 +1859,50 @@ class TradingCards(commands.Cog):
 
     @tcgset.command(name="maxopen")
     async def tcgset_maxopen(self, ctx: commands.Context, amount: int):
+        """Deprecated: packs can only be opened one at a time now."""
         if amount < 1:
             await ctx.send("maxopen must be at least 1.")
             return
         await self.config.guild(ctx.guild).max_open.set(int(amount))
-        await ctx.send(f"Set max open amount to {amount}.")
+        await ctx.send(
+            f"Set max open amount to {amount}. Note: `{ctx.clean_prefix}tcg open` now always "
+            "opens exactly one pack per use regardless of this setting."
+        )
+
+    @tcgset.command(name="serverpacklimit")
+    async def tcgset_serverpacklimit(
+        self,
+        ctx: commands.Context,
+        amount: int,
+        window_hours: Optional[float] = None,
+        reset_window: bool = False,
+    ):
+        """Set a server-wide cap on packs purchased within a rolling time window.
+
+        Use 0 to disable the server-wide limit entirely. Pass `True` for
+        `reset_window` to immediately clear the current window's usage count.
+        """
+        if amount < 0:
+            await ctx.send("The server pack limit must be 0 (disabled) or greater.")
+            return
+        if window_hours is not None and window_hours <= 0:
+            await ctx.send("The window (in hours) must be greater than 0.")
+            return
+        guild_conf = self.config.guild(ctx.guild)
+        await guild_conf.server_pack_limit.set(int(amount))
+        if window_hours is not None:
+            await guild_conf.server_pack_limit_window_hours.set(float(window_hours))
+        if reset_window:
+            await guild_conf.server_pack_purchases.set({"window_start": cards.now_ts(), "count": 0})
+        current_window_hours = float(await guild_conf.server_pack_limit_window_hours())
+        if amount <= 0:
+            await ctx.send("Server-wide pack purchase limit disabled.")
+        else:
+            reset_note = " The current window's usage was reset." if reset_window else ""
+            await ctx.send(
+                f"Server-wide pack purchase limit set to **{amount}** pack(s) per "
+                f"{current_window_hours:g} hour(s).{reset_note}"
+            )
 
     @tcgset.command(name="tradeexpiry")
     async def tcgset_tradeexpiry(self, ctx: commands.Context, minutes: int):
@@ -1727,9 +1936,20 @@ class TradingCards(commands.Cog):
         set_cache = await guild_conf.set_cache()
         embed = discord.Embed(title="TCG Settings", color=discord.Color.blurple())
         embed.add_field(name="Max Buy", value=str(await guild_conf.max_buy()), inline=True)
-        embed.add_field(name="Max Open", value=str(await guild_conf.max_open()), inline=True)
+        embed.add_field(name="Max Open", value="1 (fixed)", inline=True)
         embed.add_field(name="Trade Expiry", value=f"{await guild_conf.trade_expiry_minutes()} min", inline=True)
         embed.add_field(name="Market Tax", value=f"{await guild_conf.market_tax_percent()}%", inline=True)
+        server_pack_limit = int(await guild_conf.server_pack_limit())
+        server_pack_limit_window_hours = float(await guild_conf.server_pack_limit_window_hours())
+        if server_pack_limit > 0:
+            server_pack_purchases = await guild_conf.server_pack_purchases()
+            limit_value = (
+                f"{int(server_pack_purchases.get('count', 0))}/{server_pack_limit} used "
+                f"per {server_pack_limit_window_hours:g}h"
+            )
+        else:
+            limit_value = "Disabled"
+        embed.add_field(name="Server Pack Limit", value=limit_value, inline=True)
         lines = []
         for set_id, set_name in cards.SUPPORTED_SETS.items():
             enabled = enabled_sets.get(set_id, True)
@@ -1741,6 +1961,7 @@ class TradingCards(commands.Cog):
             )
         embed.add_field(name="Sets", value="\n".join(lines), inline=False)
         await ctx.send(embed=embed)
+
 
     @tcgset.command(name="repairlocks")
     async def tcgset_repairlocks(self, ctx: commands.Context):

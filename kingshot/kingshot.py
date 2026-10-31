@@ -78,8 +78,8 @@ class Kingshot(commands.Cog):
         original = getattr(error, "original", error)
         if isinstance(original, (APIError, ValueError)):
             await ctx.send(str(original), allowed_mentions=discord.AllowedMentions.none())
-        elif isinstance(original, (commands.BadArgument, commands.MissingRequiredArgument)):
-            await ctx.send("Invalid or missing argument. See the command's help.")
+        elif isinstance(original, commands.UserInputError):
+            await ctx.send("Invalid, missing or extra argument. See the command's help.")
         elif isinstance(original, discord.Forbidden):
             await ctx.send("I lack a required Discord permission (view/send/embed/read history).")
         elif isinstance(original, discord.HTTPException):
@@ -100,6 +100,11 @@ class Kingshot(commands.Cog):
 
     async def _settings(self, ctx):
         return await self.config.guild(ctx.guild).all()
+
+    async def _kingdom_id(self, ctx, kid: Optional[int] = None):
+        if kid is None:
+            kid = (await self._settings(ctx))["kingdom"]
+        return identifier(kid)
 
     async def _change(self, ctx, **values):
         async with self._lock(ctx.guild.id):
@@ -225,11 +230,11 @@ class Kingshot(commands.Cog):
                                f"{number(second.get('age_seconds'))}; not necessarily simultaneous")
         await ctx.send(embed=result)
 
-    @ks.command(name="ranks")
-    async def ranks(self, ctx, board: str = "personal_power"):
-        """Kingdom leaderboard; defaults to personal_power."""
-        settings = await self._settings(ctx)
-        data = await self.api.ranks(settings["kingdom"], board)
+    @ks.command(name="ranks", ignore_extra=False)
+    async def ranks(self, ctx, board: str = "personal_power", kid: Optional[int] = None):
+        """Leaderboard: ranks [board] [kingdom_id]. Defaults to the saved kingdom."""
+        kid = await self._kingdom_id(ctx, kid)
+        data = await self.api.ranks(kid, board)
         required = {"aid", "score"} if board.startswith("alliance_") else {"uid", "score"}
         rows = records(data, required)
         if not rows:
@@ -237,16 +242,21 @@ class Kingshot(commands.Cog):
         lines = [f"{i}. {text(row.get('abbr', row.get('nick_name')))} "
                  f"({text(row.get('governor_id', row.get('aid')))}) - {number(row.get('score'))}"
                  for i, row in enumerate(rows[:100], 1)]
-        await self._send_pages(ctx, f"K{settings['kingdom']} {board}", lines, data)
+        await self._send_pages(ctx, f"K{kid} {board}", lines, data)
 
-    async def _alliance(self, ctx):
-        settings = await self._settings(ctx)
-        return await self.api.alliance(settings["kingdom"], settings["alliance"])
+    async def _alliance(self, ctx, kid: Optional[int] = None, tag: Optional[str] = None):
+        if kid is None and tag is None:
+            settings = await self._settings(ctx)
+            kid, tag = settings["kingdom"], settings["alliance"]
+        elif kid is None or tag is None:
+            raise ValueError("Supply both kingdom ID and case-sensitive alliance tag, "
+                             "for example: ks alliance 571 ABC. Omit both for the saved alliance.")
+        return await self.api.alliance(identifier(kid), alliance_tag(tag))
 
-    @ks.command(name="alliance")
-    async def alliance(self, ctx):
-        """Configured alliance overview."""
-        data = await self._alliance(ctx)
+    @ks.command(name="alliance", ignore_extra=False)
+    async def alliance(self, ctx, kid: Optional[int] = None, tag: Optional[str] = None):
+        """Alliance overview: alliance [kingdom_id tag]. Omit both for the saved alliance."""
+        data = await self._alliance(ctx, kid, tag)
         alliance = mapping(data, "alliance")
         result = embed(f"[{text(alliance.get('abbr'))}] {text(alliance.get('name'))}", data)
         fields(result, alliance, [("Kingdom", "kid", True), ("Power", "power", True),
@@ -255,23 +265,26 @@ class Kingshot(commands.Cog):
         image(result, alliance.get("flag_url"))
         await ctx.send(embed=result)
 
-    @ks.command(name="members")
-    async def members(self, ctx):
-        """Paginated alliance roster. Activity fields are intentionally excluded."""
-        data = await self._alliance(ctx)
+    @ks.command(name="members", ignore_extra=False)
+    async def members(self, ctx, kid: Optional[int] = None, tag: Optional[str] = None):
+        """Roster: members [kingdom_id tag]. Stale activity fields are excluded."""
+        data = await self._alliance(ctx, kid, tag)
+        alliance = mapping(data, "alliance")
         lines = [f"**{text(m.get('nick_name'))}** ({text(m.get('governor_id'))}) | "
                  f"{text(m.get('alliance_rank_label'))} | Power {number(m.get('power'))} | "
                  f"TC {number(m.get('town_center_level'))}" for m in roster(data)]
-        await self._send_pages(ctx, "Alliance members", lines, data)
+        await self._send_pages(ctx, f"K{alliance.get('kid')} [{text(alliance.get('abbr'))}] members",
+                               lines, data)
 
-    @ks.command(name="top")
-    async def top(self, ctx):
-        """Ten strongest recorded alliance members with published power."""
-        data = await self._alliance(ctx)
+    @ks.command(name="top", ignore_extra=False)
+    async def top(self, ctx, kid: Optional[int] = None, tag: Optional[str] = None):
+        """Ten strongest members: top [kingdom_id tag]. Omit both for saved settings."""
+        data = await self._alliance(ctx, kid, tag)
+        alliance = mapping(data, "alliance")
         members = [m for m in roster(data) if isinstance(m.get("power"), (int, float))
                    and not isinstance(m.get("power"), bool)]
         members.sort(key=lambda m: m["power"], reverse=True)
-        await self._send_pages(ctx, "Strongest alliance members",
+        await self._send_pages(ctx, f"K{alliance.get('kid')} [{text(alliance.get('abbr'))}] strongest",
                                [f"{i}. {text(m.get('nick_name'))}: {number(m.get('power'))}"
                                 for i, m in enumerate(members[:10], 1)], data)
 
@@ -318,13 +331,13 @@ class Kingshot(commands.Cog):
             lines.append("No membership changes observed.")
         await self._send_pages(ctx, "Observed roster changes", lines)
 
-    @ks.command(name="kingdom")
-    async def kingdom(self, ctx):
-        """Kingdom statistics; on-map player count is not recent activity."""
-        settings = await self._settings(ctx)
-        data = await self.api.kingdom(settings["kingdom"])
+    @ks.command(name="kingdom", ignore_extra=False)
+    async def kingdom(self, ctx, kid: Optional[int] = None):
+        """Kingdom statistics: kingdom [kingdom_id]. Omit ID for the saved kingdom."""
+        kid = await self._kingdom_id(ctx, kid)
+        data = await self.api.kingdom(kid)
         kingdom = mapping(data, "kingdom")
-        result = embed(f"Kingdom {settings['kingdom']}", data)
+        result = embed(f"Kingdom {kid}", data)
         fields(result, kingdom, [
             ("Name", "name", False), ("Power", "power", True), ("Average power", "avg_power", True),
             ("Power rank", "power_rank", True), ("Players", "player_count", True),
@@ -335,26 +348,26 @@ class Kingshot(commands.Cog):
         image(result, kingdom.get("banner_url"))
         await ctx.send(embed=result)
 
-    @ks.command(name="kvk")
-    async def kvk(self, ctx):
-        """Current matchup, season and stage (no score request)."""
-        kid = (await self._settings(ctx))["kingdom"]
+    @ks.command(name="kvk", ignore_extra=False)
+    async def kvk(self, ctx, kid: Optional[int] = None):
+        """Matchup, season and stage: kvk [kingdom_id]. No score request."""
+        kid = await self._kingdom_id(ctx, kid)
         await ctx.send(embed=kvk_embed(kid, await self.api.kvk(kid)))
 
-    async def _score_command(self, ctx):
-        kid = (await self._settings(ctx))["kingdom"]
+    async def _score_command(self, ctx, kid: Optional[int] = None):
+        kid = await self._kingdom_id(ctx, kid)
         matchup, scores, unavailable = await self._kvk_data(kid)
         await ctx.send(embed=kvk_embed(kid, matchup, scores, unavailable, time.time()))
 
-    @ks.command(name="score")
-    async def score(self, ctx):
-        """Current preparation scores and standing, not castle battle results."""
-        await self._score_command(ctx)
+    @ks.command(name="score", ignore_extra=False)
+    async def score(self, ctx, kid: Optional[int] = None):
+        """Preparation scores: score [kingdom_id]. Not castle battle results."""
+        await self._score_command(ctx, kid)
 
-    @ks.command(name="kvkdays")
-    async def kvkdays(self, ctx):
-        """All published preparation days I-V with status and scores."""
-        await self._score_command(ctx)
+    @ks.command(name="kvkdays", ignore_extra=False)
+    async def kvkdays(self, ctx, kid: Optional[int] = None):
+        """Preparation days I-V: kvkdays [kingdom_id]. Omit ID for the saved kingdom."""
+        await self._score_command(ctx, kid)
 
     @ks.command(name="matchups")
     async def matchups(self, ctx):
@@ -373,10 +386,10 @@ class Kingshot(commands.Cog):
         await self._send_pages(ctx, f"Current-season matchups (season {text(data.get('season'))})",
                                lines, data)
 
-    @ks.command(name="events")
-    async def events(self, ctx):
-        """Documented kingdom calendar, not personal alliance events."""
-        kid = (await self._settings(ctx))["kingdom"]
+    @ks.command(name="events", ignore_extra=False)
+    async def events(self, ctx, kid: Optional[int] = None):
+        """Kingdom calendar: events [kingdom_id]. Not personal alliance events."""
+        kid = await self._kingdom_id(ctx, kid)
         data = await self.api.events(kid)
         await self._send_pages(ctx, f"K{kid} event calendar",
                                [f"**{text(e.get('name'))}** | {text(e.get('category'))}\n"

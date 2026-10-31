@@ -24,8 +24,8 @@ and the event calendar. Install from main:
 [p]ksset test
 ```
 
-For cross-kingdom lookups before the update merges, append
-`feature/kingshot-cross-kingdom` to `repo add` for a new repository.
+For account linking before the update merges, append
+`feature/kingshot-account-linking` to `repo add` for a new repository.
 API key setup sends a secure
 Red shared-token modal by DM (`mightpulse`, token name `api_key`); **never pass the
 key in a public command**. Guild settings are independent; the token and API
@@ -38,6 +38,14 @@ Query other kingdoms without changing saved settings with `[p]ks kingdom 571`,
 `[p]ks kvkdays 571` or `[p]ks events 571`. Replace `ABC` with the case-sensitive
 alliance tag, not its full name. Commands without optional arguments still use
 the configured defaults.
+Members can optionally use `[p]link <governor_id>` (e.g. `!!link 12345678`) to
+associate an **unverified** game account, sync the in-game name to their server
+nickname and receive administrator-selected existing non-privileged roles.
+Use `[p]sync` to update and `[p]unlink` to remove the association and clean up.
+Administrators configure `[p]ks linkset role @LinkedPlayer` and optional
+`[p]ks linkset alliance @VILMember`. The bot needs Manage Nicknames/Manage Roles
+and sufficient role hierarchy. Linking does not prove ownership; statistics
+remain public. See the cog README for setup, cleanup and data-deletion details.
 Administrators can enable `[p]ks auto enable` and `[p]ks remind enable` after
 configuring a channel. Refresh intervals have a five-minute minimum. Inactivity
 reporting is disabled because the API's player activity fields are stale.

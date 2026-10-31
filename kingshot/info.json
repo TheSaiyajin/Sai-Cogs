@@ -2,7 +2,7 @@
   "author": ["Sai"],
   "name": "Kingshot",
   "short": "MightPulse Kingshot statistics, alliance history and KvK dashboards",
-  "description": "Kingshot player and alliance statistics, hourly roster snapshots, preparation score dashboards and kingdom event reminders using MightPulse. Mighty is required for events and KvK.",
+  "description": "Kingshot statistics, alliance snapshots, preparation dashboards, reminders and unverified self-service governor linking with server nickname/role sync. Mighty is required for events and KvK.",
   "install_msg": "Load kingshot, then use [p]ksset apikey to configure Red's shared MightPulse token securely. See [p]help ks and the kingshot README.",
   "tags": ["kingshot", "mightpulse", "alliance", "kvk"],
   "requirements": ["aiohttp"],
@@ -11,5 +11,5 @@
   "min_python_version": [3, 9, 0],
   "hidden": false,
   "disabled": false,
-  "end_user_data_statement": "Stores guild settings, dashboard IDs, public game roster/power snapshots, manual events and reminder markers. API keys use Red's bot-wide shared token storage."
+  "end_user_data_statement": "Stores guild settings, dashboard IDs, public game snapshots, manual events and reminder markers. Linking stores per-server Discord member/governor associations, timestamps, cog-assigned role IDs and original/applied/pending nicknames for cleanup. Links are unverified. Red data deletion removes member linking records. API keys use Red's shared token storage."
 }

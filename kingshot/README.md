@@ -17,8 +17,8 @@ declared for Downloader; Red already uses it. Install from the main branch:
 ```
 
 If `sai-cogs` is already added, use that repository name and its configured branch.
-For the cross-kingdom lookup update before merge, append
-`feature/kingshot-cross-kingdom` to `repo add` when adding a new repository.
+For the account-linking update before merge, append
+`feature/kingshot-account-linking` to `repo add` when adding a new repository.
 `[p]` means your bot's command prefix, not literal text.
 
 ### Secure configuration (bot owner)
@@ -54,6 +54,91 @@ the counted allowance. It does not call every paid endpoint.
 ## Commands
 
 All `ks` commands require a server. Normal members may read statistics.
+
+## Account linking and server nickname/roles
+
+Self-service linking is optional. Statistics remain public; nobody needs to link
+to use `ks player`, `ks alliance`, ranks or other statistics commands.
+
+If your prefix is `!!`, use:
+
+```text
+!!link 12345678
+!!sync
+!!unlink
+```
+
+`link <governor_id>` takes the **in-game governor ID**, not a Discord user ID or
+internal game UID. It looks up that governor, saves your account association in
+this Discord server, changes your **server nickname** to the recorded in-game name
+(up to Discord's 32-character limit), and applies the administrator-configured
+existing roles. It does not change your global Discord username. No API key,
+game password or verification code is requested from members.
+
+**Links are UNVERIFIED.** MightPulse player lookup does not prove who owns an
+account. Anyone who knows an ID can claim it. Links and assigned roles are not
+identity verification or authorization to staff/privileged access. Do not
+configure access to sensitive private channels based on these roles. One governor
+ID can be linked to one Discord member per server; an administrator can clear a
+disputed link. This uniqueness rule is not ownership verification.
+
+### Administrator setup (existing server roles only)
+
+Create or choose suitable **non-privileged** roles in Discord yourself, then:
+
+```text
+[p]ks linkset role @LinkedPlayer
+[p]ks linkset alliance @VILMember
+[p]ks linkset nickname true
+[p]ks linkset status
+```
+
+- `role [role]`: assign this role to linked accounts; omit the role to disable.
+- `alliance [role]`: assign this role only when the recorded player belongs to
+  the saved kingdom **and** case-sensitive alliance tag (570 / VIL initially);
+  omit the role to disable. It is not a mapping of every alliance in the game.
+- `nickname <true|false>`: enable/disable nickname synchronization; enabled by default.
+- `status`: show linking settings.
+- `clear <Discord member>`: clear a disputed link and attempt role/nickname cleanup,
+  e.g. `[p]ks linkset clear @Member`. Administrators other than the server owner
+  may only clear members below their highest role.
+
+Roles are disabled by default until an administrator selects them. The cog never
+creates roles, guesses role names or applies an arbitrary role just because its
+name resembles an alliance tag. Managed roles, `@everyone`, roles above/equal to
+the bot/administrator and roles with staff/moderation/management permissions are
+rejected. Permission checks are repeated on sync; formerly assigned roles that
+become unsafe are removed when manageable, or a cleanup warning is displayed.
+
+The bot needs **Manage Nicknames** and **Manage Roles**, with its highest role
+above the roles it assigns and above the members whose nickname it edits. Discord
+does not allow changing the server owner's nickname. Missing permissions or
+hierarchy failures are reported; account linking can persist even when a
+nickname/role update fails. Fix permissions and run `sync` again.
+Each link/sync/unlink fetches current Discord member state rather than trusting
+gateway-cache updates, so quick successive commands can safely reconcile changes.
+
+`sync` updates your nickname/roles from the recorded account. It removes old
+cog-assigned alliance roles if you leave the configured alliance and applies
+new role settings. It respects the existing **one-hour player cache**, so an
+in-game rename or alliance transfer may not appear immediately. There is **no
+scheduled member sync**: changes apply only on `link` or `sync`. Role/kingdom/tag
+configuration changes do not modify every member immediately.
+
+`unlink` removes the association and roles this cog assigned, while preserving
+roles you already had before linking. It restores the previous server nickname
+only if your current nickname is one set/pending from this cog; a manually changed
+nickname is not overwritten. Failed/ambiguous operations retain cleanup markers
+for retry with `unlink` (or `sync` while still linked). Relinking another governor
+keeps cleanup tracking for the original nickname and previous cog-assigned roles.
+
+Member associations, link timestamps, assigned-role IDs and original/applied/
+pending nicknames persist across cog reloads. Red's data-deletion hook removes
+that member's linking records in every guild. Data deletion does not make Discord
+role/nickname changes; use `unlink` before requesting deletion if cleanup is desired.
+Links are per Discord server and have no automatic activity or ownership checks.
+
+## Statistics commands
 
 | Command | Output |
 |---|---|
@@ -257,11 +342,14 @@ python -m pytest tests/test_kingshot.py -q
 python -m compileall -q kingshot
 ```
 
-Offline validation on 2026-10-31: **153 Kingshot tests / 169 full repository tests
+Offline validation on 2026-10-31: **199 Kingshot tests / 215 full repository tests
 passed**, with Python 3.11, Red 3.5.24 and discord.py 2.7.1. Real Red cog injection,
 unload/reload and temporary on-disk JSON Config persistence passed without login.
 Cross-kingdom command parsing, explicit API targets, invalid arguments and
 unchanged per-guild settings are covered.
+Linking tests cover nickname/role updates, permission/hierarchy failures,
+unverified role restrictions, guild-local duplicate claims, cleanup, retry markers,
+member Config persistence, data deletion and real top-level command registration.
 Syntax compilation and `git diff --check` also passed. Two pytest deprecation
 warnings originate in Red's `aiohttp-json-rpc` dependency, not this cog.
 
@@ -274,6 +362,8 @@ The bot owner must perform live acceptance after installation:
 4. Reload the cog and verify the same dashboard is edited.
 5. Verify a manual event reminder in a test channel and both default offsets.
 6. Wait for two distinct hourly snapshots, then verify progress and membership changes.
+7. Configure non-privileged linking roles, run `link` / `sync` / `unlink` with a test
+   member below the bot, and verify nickname, role assignment and restoration.
 
 No real Discord login or authenticated MightPulse requests are made in automated
 tests. Installation in your running bot and live subscription behavior cannot be

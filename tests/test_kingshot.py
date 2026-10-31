@@ -457,6 +457,120 @@ def test_ranks_kingdom_and_matchup_commands(cog_context):
     assert "K570 vs K39" in ctx.send.call_args.kwargs["embed"].description
 
 
+@pytest.mark.parametrize("command", ["alliance", "members", "top"])
+@pytest.mark.parametrize("override", [False, True])
+def test_alliance_lookup_target_and_unchanged_settings(cog_context, command, override):
+    cog, ctx, config, _, _ = cog_context
+    before = deepcopy(config.guilds)
+    args = (571, "AbC") if override else ()
+    data = deepcopy(ALLIANCE)
+    data["alliance"].update(kid=571 if override else 570, abbr="AbC" if override else "VIL")
+    cog.api.alliance.return_value = data
+    invoke(cog, ctx, command, *args)
+    cog.api.alliance.assert_awaited_once_with(571 if override else 570, "AbC" if override else "VIL")
+    assert ctx.send.called and config.guilds == before
+    if command != "alliance":
+        title = ctx.send.call_args.kwargs["embed"].title
+        assert str(data["alliance"]["kid"]) in title and data["alliance"]["abbr"] in title
+
+
+@pytest.mark.parametrize("command", ["kingdom", "kvk", "score", "kvkdays", "events", "ranks"])
+@pytest.mark.parametrize("override", [False, True])
+def test_kingdom_lookup_target_and_unchanged_settings(cog_context, command, override):
+    cog, ctx, config, _, _ = cog_context
+    before = deepcopy(config.guilds)
+    kid = 571 if override else 570
+    matchup = deepcopy(MATCHUP)
+    matchup["kingdom"]["kid"] = kid
+    cog.api.kvk.return_value = matchup
+    cog.api.scores.return_value = dict(SCORES, kingdom=kid)
+    cog.api.kingdom = AsyncMock(return_value={"ok": True, "kingdom": {"kid": kid}})
+    cog.api.ranks = AsyncMock(return_value={"ok": True, "rows": [
+        {"uid": 10, "nick_name": "Governor", "score": 1000}]})
+    args = (kid,) if override else ()
+    if command == "ranks":
+        args = ("personal_power", kid) if override else ()
+    invoke(cog, ctx, command, *args)
+    if command in ("kvk", "score", "kvkdays"):
+        cog.api.kvk.assert_awaited_once_with(kid)
+        if command != "kvk":
+            cog.api.scores.assert_awaited_once_with(kid)
+    elif command == "ranks":
+        cog.api.ranks.assert_awaited_once_with(kid, "personal_power")
+    else:
+        getattr(cog.api, command).assert_awaited_once_with(kid)
+    assert str(kid) in ctx.send.call_args.kwargs["embed"].title
+    assert config.guilds == before
+
+
+@pytest.mark.parametrize("command", ["alliance", "members", "top"])
+@pytest.mark.parametrize("args", [(571,), (None, "ABC"), (0, "ABC"), (571, "../ABC"),
+                                   (571, "Alliance Full Name")])
+def test_invalid_alliance_override_never_requests_or_changes_settings(cog_context, command, args):
+    cog, ctx, config, _, _ = cog_context
+    before = deepcopy(config.guilds)
+    with pytest.raises(ValueError):
+        invoke(cog, ctx, command, *args)
+    assert not cog.api.alliance.called and not ctx.send.called
+    assert config.guilds == before
+
+
+@pytest.mark.parametrize("command", ["kingdom", "kvk", "score", "kvkdays", "events", "ranks"])
+def test_invalid_kingdom_override_never_requests(cog_context, command):
+    cog, ctx, config, _, _ = cog_context
+    before = deepcopy(config.guilds)
+    args = ("personal_power", 0) if command == "ranks" else (0,)
+    with pytest.raises(ValueError):
+        invoke(cog, ctx, command, *args)
+    assert not cog.api.kvk.called and not cog.api.scores.called and not cog.api.events.called
+    assert not ctx.send.called and config.guilds == before
+
+
+@pytest.mark.parametrize("command,arguments,expected", [
+    ("kingdom", "571", [571]), ("kingdom", "", [None]),
+    ("alliance", "571 AbC", [571, "AbC"]), ("alliance", "", [None, None]),
+    ("members", "571 AbC", [571, "AbC"]), ("top", "571 AbC", [571, "AbC"]),
+    ("ranks", "personal_power 571", ["personal_power", 571]),
+    ("ranks", "kills", ["kills", None]), ("ranks", "", ["personal_power", None]),
+    ("kvk", "571", [571]), ("score", "571", [571]), ("kvkdays", "571", [571]),
+    ("events", "571", [571]),
+])
+def test_red_parses_cross_kingdom_command_arguments(cog_context, monkeypatch,
+                                                  command, arguments, expected):
+    from discord.ext.commands.view import StringView
+    from redbot.core import commands
+
+    cog, ctx, _, _, _ = cog_context
+    cmd = getattr(Kingshot, command)
+    monkeypatch.setattr(cmd, "cog", cog)
+    message = MagicMock()
+    message.attachments = []
+    parsed = commands.Context(message=message, bot=cog.bot,
+                              view=StringView(arguments), command=cmd)
+    run(cmd._parse_arguments(parsed))
+    assert parsed.args[2:] == expected
+
+
+@pytest.mark.parametrize("command,arguments", [
+    ("kingdom", "not-an-id"), ("kingdom", "571 extra"), ("kvk", "ABC"),
+    ("score", "ABC"), ("kvkdays", "ABC"), ("events", "ABC"),
+    ("ranks", "personal_power not-an-id"), ("alliance", "571 ABC extra"),
+])
+def test_red_rejects_invalid_or_extra_arguments(cog_context, monkeypatch, command, arguments):
+    from discord.ext.commands.view import StringView
+    from redbot.core import commands
+
+    cog, _, _, _, _ = cog_context
+    cmd = getattr(Kingshot, command)
+    monkeypatch.setattr(cmd, "cog", cog)
+    message = MagicMock()
+    message.attachments = []
+    parsed = commands.Context(message=message, bot=cog.bot,
+                              view=StringView(arguments), command=cmd)
+    with pytest.raises(commands.UserInputError):
+        run(cmd._parse_arguments(parsed))
+
+
 def test_dashboard_updates_and_persists(cog_context):
     cog, ctx, config, channel, message = cog_context
 
@@ -627,11 +741,15 @@ def test_manual_schedule_and_offsets(cog_context):
 
 
 def test_command_error_messages_are_safe(cog_context):
+    from redbot.core import commands
+
     cog, ctx, _, _, _ = cog_context
     run(cog.cog_command_error(ctx, APIError(401, "auth")))
     assert "rejected the key" in ctx.send.call_args.args[0]
     run(cog.cog_command_error(ctx, RuntimeError("TEST-ONLY-KEY")))
     assert "TEST-ONLY-KEY" not in str(ctx.send.call_args_list)
+    run(cog.cog_command_error(ctx, commands.TooManyArguments()))
+    assert "extra argument" in ctx.send.call_args.args[0]
 
 
 def test_secure_modal_no_secret_argument(cog_context, monkeypatch):

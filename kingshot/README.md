@@ -8,17 +8,17 @@ existing **Mighty** API subscription.
 ## Install
 
 Requires Red **3.5.24 or newer** and its supported Python version. `aiohttp` is
-declared for Downloader; Red already uses it. Install from the branch containing
-the cog until the pull request is merged:
+declared for Downloader; Red already uses it. Install from the main branch:
 
 ```text
-[p]repo add sai-cogs https://github.com/TheSaiyajin/Sai-Cogs feature/kingshot-mightpulse
+[p]repo add sai-cogs https://github.com/TheSaiyajin/Sai-Cogs
 [p]cog install sai-cogs kingshot
 [p]load kingshot
 ```
 
-After merge, omit the branch argument when adding the repository. If `sai-cogs`
-is already added, use that repository name and its configured branch.
+If `sai-cogs` is already added, use that repository name and its configured branch.
+For the cross-kingdom lookup update before merge, append
+`feature/kingshot-cross-kingdom` to `repo add` when adding a new repository.
 `[p]` means your bot's command prefix, not literal text.
 
 ### Secure configuration (bot owner)
@@ -61,20 +61,50 @@ All `ks` commands require a server. Normal members may read statistics.
 | `[p]ks heroes <governor_id>` | Recorded **arena defence team**, levels, stars, power, equipped upgrades/mastery and widget |
 | `[p]ks gear <governor_id>` | Governor gear, quality, tier, stars, strength upgrades, score and combat; hidden gear is identified |
 | `[p]ks compare <player1> <player2>` | Recorded power, TC, kills, VIP and kingdom, with independent data ages |
-| `[p]ks ranks [board]` | Up to 100 leaderboard entries, paginated; default `personal_power` |
-| `[p]ks alliance` | Configured alliance overview |
-| `[p]ks members` | Paginated roster, IDs, alliance ranks, power and TC |
-| `[p]ks top` | Ten strongest members with available power |
+| `[p]ks ranks [board] [kingdom_id]` | Up to 100 leaderboard entries, paginated; default `personal_power` |
+| `[p]ks alliance [kingdom_id tag]` | Alliance overview; omit both arguments for configured alliance |
+| `[p]ks members [kingdom_id tag]` | Paginated roster, IDs, alliance ranks, power and TC |
+| `[p]ks top [kingdom_id tag]` | Ten strongest members with available power |
 | `[p]ks inactive` | Explanation only: activity reporting is disabled |
 | `[p]ks progress` | Member power differences between the latest two hourly snapshots |
 | `[p]ks changes` | New/departed members between those snapshots |
-| `[p]ks kingdom` | Kingdom statistics, including on-map player count (not recent activity) |
-| `[p]ks kvk` | Current matchup, season, stage and bye status |
-| `[p]ks score` | Preparation totals, difference, winning/losing/tied, published days |
-| `[p]ks kvkdays` | Same score card, including every available preparation day I-V and its status |
+| `[p]ks kingdom [kingdom_id]` | Kingdom statistics, including on-map player count (not recent activity) |
+| `[p]ks kvk [kingdom_id]` | Current matchup, season, stage and bye status |
+| `[p]ks score [kingdom_id]` | Preparation totals, difference, winning/losing/tied, published days |
+| `[p]ks kvkdays [kingdom_id]` | Same score card, including every available preparation day I-V and its status |
 | `[p]ks matchups` | Available current-season matchup records |
-| `[p]ks events` | Kingdom calendar with start/end Discord timestamps |
+| `[p]ks events [kingdom_id]` | Kingdom calendar with start/end Discord timestamps |
 | `[p]ks usage` | **Bot owner only:** Mighty status and minute/day allowance |
+
+### Look up other kingdoms without changing settings
+
+The optional ID is an **in-game kingdom/server ID**, not a Discord server ID.
+Anyone who can use the lookup commands can query another kingdom:
+
+```text
+[p]ks kingdom 571
+[p]ks alliance 571 ABC
+[p]ks members 571 ABC
+[p]ks top 571 ABC
+[p]ks ranks personal_power 571
+[p]ks kvk 571
+[p]ks score 571
+[p]ks kvkdays 571
+[p]ks events 571
+```
+
+Replace `571` and `ABC` with the desired kingdom and actual alliance **tag**.
+The documented alliance endpoint takes a case-sensitive tag (`abbr`), not a full
+alliance name; there is no full-name search endpoint in this cog. Alliance queries
+require both ID and tag when overriding, avoiding an accidental lookup of your
+saved tag in another kingdom. Leaderboards keep the existing board-first syntax.
+Omitting arguments preserves existing configured defaults (570/VIL initially).
+
+These are read-only, one-off queries: they do not change your dashboard, reminders,
+saved kingdom/alliance or snapshot history. `ks progress` and `ks changes` still
+report only the configured alliance's stored snapshots. Player commands already
+look up governor IDs independently of kingdom. All kingdoms share the existing
+API key, cache and subscription allowance; events/KvK still require Mighty.
 
 Supported leaderboard slugs:
 
@@ -227,9 +257,11 @@ python -m pytest tests/test_kingshot.py -q
 python -m compileall -q kingshot
 ```
 
-Offline validation on 2026-10-31: **93 Kingshot tests / 109 full repository tests
+Offline validation on 2026-10-31: **153 Kingshot tests / 169 full repository tests
 passed**, with Python 3.11, Red 3.5.24 and discord.py 2.7.1. Real Red cog injection,
 unload/reload and temporary on-disk JSON Config persistence passed without login.
+Cross-kingdom command parsing, explicit API targets, invalid arguments and
+unchanged per-guild settings are covered.
 Syntax compilation and `git diff --check` also passed. Two pytest deprecation
 warnings originate in Red's `aiohttp-json-rpc` dependency, not this cog.
 

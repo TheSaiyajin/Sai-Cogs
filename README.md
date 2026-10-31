@@ -10,10 +10,10 @@ This repository contains Red Discord bot cogs:
 ## Kingshot Setup
 
 Requires Red 3.5.24+ and a MightPulse API key; Mighty access is required for KvK
-and the event calendar. Until merged, add the feature branch:
+and the event calendar. Install from main:
 
 ```text
-[p]repo add sai-cogs https://github.com/TheSaiyajin/Sai-Cogs feature/kingshot-mightpulse
+[p]repo add sai-cogs https://github.com/TheSaiyajin/Sai-Cogs
 [p]cog install sai-cogs kingshot
 [p]load kingshot
 [p]ksset apikey
@@ -24,12 +24,20 @@ and the event calendar. Until merged, add the feature branch:
 [p]ksset test
 ```
 
-After merge, omit the branch argument in `repo add`. API key setup sends a secure
+For cross-kingdom lookups before the update merges, append
+`feature/kingshot-cross-kingdom` to `repo add` for a new repository.
+API key setup sends a secure
 Red shared-token modal by DM (`mightpulse`, token name `api_key`); **never pass the
 key in a public command**. Guild settings are independent; the token and API
 allowance are shared bot-wide.
 
 Use `[p]ks player <governor_id>`, `[p]ks alliance`, `[p]ks score` and `[p]help ks`.
+Query other kingdoms without changing saved settings with `[p]ks kingdom 571`,
+`[p]ks alliance 571 ABC`, `[p]ks members 571 ABC`, `[p]ks top 571 ABC`,
+`[p]ks ranks personal_power 571`, `[p]ks kvk 571`, `[p]ks score 571`,
+`[p]ks kvkdays 571` or `[p]ks events 571`. Replace `ABC` with the case-sensitive
+alliance tag, not its full name. Commands without optional arguments still use
+the configured defaults.
 Administrators can enable `[p]ks auto enable` and `[p]ks remind enable` after
 configuring a channel. Refresh intervals have a five-minute minimum. Inactivity
 reporting is disabled because the API's player activity fields are stale.

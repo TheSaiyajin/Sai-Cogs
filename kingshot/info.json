@@ -1,0 +1,15 @@
+{
+  "author": ["Sai"],
+  "name": "Kingshot",
+  "short": "MightPulse Kingshot statistics, alliance history and KvK dashboards",
+  "description": "Kingshot player and alliance statistics, hourly roster snapshots, preparation score dashboards and kingdom event reminders using MightPulse. Mighty is required for events and KvK.",
+  "install_msg": "Load kingshot, then use [p]ksset apikey to configure Red's shared MightPulse token securely. See [p]help ks and the kingshot README.",
+  "tags": ["kingshot", "mightpulse", "alliance", "kvk"],
+  "requirements": ["aiohttp"],
+  "required_cogs": {},
+  "min_bot_version": "3.5.24",
+  "min_python_version": [3, 9, 0],
+  "hidden": false,
+  "disabled": false,
+  "end_user_data_statement": "Stores guild settings, dashboard IDs, public game roster/power snapshots, manual events and reminder markers. API keys use Red's bot-wide shared token storage."
+}

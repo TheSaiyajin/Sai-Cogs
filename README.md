@@ -5,6 +5,38 @@ This repository contains Red Discord bot cogs:
 - `markettrade`: fake crypto/stock trading game using Red bank credits.
 - `lifesim`: life simulation game with jobs, food, housing, and upkeep.
 - `voterole`: grants a temporary role when a vote event is received (top.gg style events).
+- `kingshot`: MightPulse Kingshot statistics, alliance power history, Mighty KvK dashboards and event reminders.
+
+## Kingshot Setup
+
+Requires Red 3.5.24+ and a MightPulse API key; Mighty access is required for KvK
+and the event calendar. Until merged, add the feature branch:
+
+```text
+[p]repo add sai-cogs https://github.com/TheSaiyajin/Sai-Cogs feature/kingshot-mightpulse
+[p]cog install sai-cogs kingshot
+[p]load kingshot
+[p]ksset apikey
+[p]ksset kingdom 570
+[p]ksset alliance VIL
+[p]ksset channel #kingshot
+[p]ksset interval 10
+[p]ksset test
+```
+
+After merge, omit the branch argument in `repo add`. API key setup sends a secure
+Red shared-token modal by DM (`mightpulse`, token name `api_key`); **never pass the
+key in a public command**. Guild settings are independent; the token and API
+allowance are shared bot-wide.
+
+Use `[p]ks player <governor_id>`, `[p]ks alliance`, `[p]ks score` and `[p]help ks`.
+Administrators can enable `[p]ks auto enable` and `[p]ks remind enable` after
+configuring a channel. Refresh intervals have a five-minute minimum. Inactivity
+reporting is disabled because the API's player activity fields are stale.
+
+See [Kingshot's README](kingshot/README.md) for the complete command list, manual
+alliance event reminders, permissions, request budgeting and live verification
+steps. KvK scores represent preparation, not castle battle results.
 
 ## Features
 - Add/remove channels in Discord with commands

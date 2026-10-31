@@ -29,6 +29,17 @@ GUILD_DEFAULTS = dict(
     remind_enabled=False, remind_channel=None, remind_offsets=[24, 1],
     reminder_attempt=0, reminder_error=None, reminder_sent={},
     manual_events=[],
+    linked_role=None, alliance_role=None, link_nickname=True,
+)
+MEMBER_DEFAULTS = dict(governor_id=None, linked_at=0, assigned_roles=[],
+                       original_nick=None, applied_nick=None, pending_nick=None)
+SAFE_ROLE_PERMISSIONS = frozenset(
+    "view_channel read_messages send_messages send_tts_messages embed_links attach_files "
+    "read_message_history add_reactions external_emojis use_external_emojis external_stickers "
+    "use_external_stickers connect speak stream use_voice_activation priority_speaker "
+    "use_application_commands create_public_threads create_private_threads send_messages_in_threads "
+    "use_embedded_activities use_soundboard use_external_sounds send_voice_messages "
+    "send_polls use_external_apps change_nickname".split()
 )
 
 
@@ -39,6 +50,7 @@ class Kingshot(commands.Cog):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=5702026103101, force_registration=True)
         self.config.register_guild(**GUILD_DEFAULTS)
+        self.config.register_member(**MEMBER_DEFAULTS)
         self.api = MightyAPI(self._token)
         self._worker: Optional[asyncio.Task] = None
         self._locks = {}
@@ -71,8 +83,10 @@ class Kingshot(commands.Cog):
         self._locks.clear()
 
     async def red_delete_data_for_user(self, *, requester, user_id):
-        # Game IDs are not linked to Discord users.
-        return
+        for guild_id, members in (await self.config.all_members()).items():
+            if user_id in members:
+                async with self._lock(guild_id):
+                    await self.config.member_from_ids(guild_id, user_id).clear()
 
     async def cog_command_error(self, ctx, error):
         original = getattr(error, "original", error)
@@ -81,7 +95,8 @@ class Kingshot(commands.Cog):
         elif isinstance(original, commands.UserInputError):
             await ctx.send("Invalid, missing or extra argument. See the command's help.")
         elif isinstance(original, discord.Forbidden):
-            await ctx.send("I lack a required Discord permission (view/send/embed/read history).")
+            await ctx.send("I lack a required Discord permission. Check channel permissions, "
+                           "Manage Nicknames/Manage Roles and the role hierarchy.")
         elif isinstance(original, discord.HTTPException):
             await ctx.send("Discord could not complete the request. Try again later.")
         elif isinstance(original, commands.CheckFailure):
@@ -151,6 +166,240 @@ class Kingshot(commands.Cog):
     async def ks(self, ctx):
         """Kingshot statistics. See help ks for all commands."""
         await ctx.send_help()
+
+    @staticmethod
+    def _role_error(guild, role):
+        if role is None:
+            return "The configured role was deleted."
+        if role.is_default() or role.managed:
+            return "Default and managed roles cannot be used for unverified linking."
+        unsafe = [name for name, enabled in role.permissions
+                  if enabled and name not in SAFE_ROLE_PERMISSIONS]
+        if unsafe:
+            return "Unverified links cannot grant privileged roles or permissions."
+        if not guild.me.guild_permissions.manage_roles or role >= guild.me.top_role:
+            return "The bot needs Manage Roles and a role above the configured role."
+        return None
+
+    def _validate_link_role(self, ctx, role):
+        error = self._role_error(ctx.guild, role)
+        if error:
+            raise ValueError(error)
+        if ctx.author.id != ctx.guild.owner_id and role >= ctx.author.top_role:
+            raise ValueError("Select a role below your highest role.")
+
+    async def _apply_link(self, member, settings, state, player=None):
+        """Track only roles/nicknames managed by linking; keep failed work retryable."""
+        config = self.config.member(member)
+        warnings = []
+        desired = set()
+        if player is not None:
+            if settings["linked_role"]:
+                desired.add(settings["linked_role"])
+            alliance = player.get("alliance")
+            if (settings["alliance_role"] and player.get("kid") == settings["kingdom"]
+                    and isinstance(alliance, dict) and alliance.get("abbr") == settings["alliance"]):
+                desired.add(settings["alliance_role"])
+            elif settings["alliance_role"] and "alliance" not in player:
+                raise APIError(200, "schema")
+        assigned = set(state["assigned_roles"])
+        held = {role.id for role in member.roles}
+        for role_id in list(desired):
+            error = self._role_error(member.guild, member.guild.get_role(role_id))
+            if error:
+                warnings.append(error)
+                desired.discard(role_id)
+        for role_id in sorted(assigned - desired):
+            role = member.guild.get_role(role_id)
+            if role is None or role_id not in held:
+                assigned.discard(role_id)
+                await config.assigned_roles.set(sorted(assigned))
+                continue
+            if (role.managed or role.is_default() or role >= member.guild.me.top_role
+                    or not member.guild.me.guild_permissions.manage_roles):
+                warnings.append("A previously assigned role cannot be removed; "
+                                "check Manage Roles and role hierarchy, then sync/unlink again.")
+                continue
+            try:
+                await member.remove_roles(role, reason="Kingshot unverified link cleanup")
+            except discord.HTTPException:
+                warnings.append("Discord could not remove a previous linked role; retry sync/unlink.")
+                continue
+            assigned.discard(role_id)
+            await config.assigned_roles.set(sorted(assigned))
+        for role_id in sorted(desired):
+            role = member.guild.get_role(role_id)
+            if role_id in held:
+                continue
+            # Reserve before granting so interrupted operations can be cleaned up.
+            assigned.add(role_id)
+            await config.assigned_roles.set(sorted(assigned))
+            try:
+                await member.add_roles(role, reason="Kingshot self-service link (UNVERIFIED)")
+            except discord.HTTPException:
+                warnings.append("Discord could not assign a configured role; retry sync.")
+        nickname = player.get("nick_name")[:32] if player and settings["link_nickname"] else None
+        previous_applied = state["applied_nick"]
+        pending_nick = state["pending_nick"]
+        if nickname is not None and nickname != member.nick:
+            if not member.guild.me.guild_permissions.manage_nicknames:
+                warnings.append("The bot needs Manage Nicknames; the account is linked but "
+                                "the nickname was not changed.")
+            else:
+                if previous_applied is None and pending_nick is None:
+                    await config.original_nick.set(member.nick)
+                await config.pending_nick.set(nickname)
+                try:
+                    await member.edit(nick=nickname, reason="Kingshot unverified game-name sync")
+                except discord.HTTPException:
+                    warnings.append("Discord could not change the nickname (server owner or role "
+                                    "hierarchy may prevent it); retry sync.")
+                else:
+                    await config.applied_nick.set(nickname)
+                    await config.pending_nick.set(None)
+        elif nickname is not None and member.nick == nickname and pending_nick is not None:
+            await config.applied_nick.set(nickname)
+            await config.pending_nick.set(None)
+        elif nickname is None and (previous_applied is not None or pending_nick is not None):
+            if member.nick is not None and member.nick in (previous_applied, pending_nick):
+                try:
+                    await member.edit(nick=state["original_nick"],
+                                      reason="Kingshot restore previous server nickname")
+                except discord.HTTPException:
+                    warnings.append("Discord could not restore the previous nickname; retry sync/unlink.")
+                else:
+                    await config.applied_nick.set(None)
+                    await config.pending_nick.set(None)
+                    await config.original_nick.set(None)
+            else:
+                # Do not overwrite a nickname manually changed since the last cog update.
+                await config.applied_nick.set(None)
+                await config.pending_nick.set(None)
+                await config.original_nick.set(None)
+        return warnings
+
+    async def _link_account(self, ctx, governor_id=None):
+        async with self._lock(ctx.guild.id):
+            member = await ctx.guild.fetch_member(ctx.author.id)
+            config = self.config.member(member)
+            state = await config.all()
+            governor_id = governor_id if governor_id is not None else state["governor_id"]
+            if governor_id is None:
+                raise ValueError("Link an account first with link <governor_id>.")
+            governor_id = identifier(governor_id)
+            members = await self.config.all_members(ctx.guild)
+            if any(uid != ctx.author.id and values.get("governor_id") == governor_id
+                   for uid, values in members.items()):
+                raise ValueError("That governor ID is already linked in this server. "
+                                 "Links are unverified; ask an administrator to clear a disputed link.")
+            data = await self.api.player(governor_id)
+            player = mapping(data, "player")
+            if (player.get("governor_id") != governor_id
+                    or not isinstance(player.get("nick_name"), str) or not player["nick_name"].strip()):
+                raise APIError(200, "schema")
+            settings = await self._settings(ctx)
+            if settings["alliance_role"]:
+                if ("alliance" not in player or "kid" not in player
+                        or (player["alliance"] is not None
+                            and (not isinstance(player["alliance"], dict)
+                                 or not isinstance(player["alliance"].get("abbr"), str)))):
+                    raise APIError(200, "schema")
+                identifier(player["kid"])
+            await config.governor_id.set(governor_id)
+            if state["governor_id"] != governor_id:
+                await config.linked_at.set(time.time())
+            warnings = await self._apply_link(member, settings, state, player)
+        result = embed("Kingshot link - UNVERIFIED", data,
+                       f"Governor {governor_id}: {text(player['nick_name'])}\n"
+                       "Self-service linking does not verify game-account ownership. "
+                       "Never use linked roles as proof of identity or privileged access.")
+        result.add_field(name="Nickname / roles",
+                         value="\n".join(warnings)[:1024] if warnings else "Synchronization completed.",
+                         inline=False)
+        await ctx.send(embed=result, allowed_mentions=discord.AllowedMentions.none())
+
+    @commands.command(name="link", ignore_extra=False)
+    @commands.guild_only()
+    @commands.bot_has_permissions(embed_links=True)
+    async def link(self, ctx, governor_id: int):
+        """Link an in-game governor ID (not Discord user ID). Ownership is UNVERIFIED."""
+        await self._link_account(ctx, governor_id)
+
+    @commands.command(name="sync", ignore_extra=False)
+    @commands.guild_only()
+    @commands.bot_has_permissions(embed_links=True)
+    async def sync(self, ctx):
+        """Sync your linked game name and configured roles. API caching still applies."""
+        await self._link_account(ctx)
+
+    async def _unlink_account(self, member):
+        async with self._lock(member.guild.id):
+            member = await member.guild.fetch_member(member.id)
+            config = self.config.member(member)
+            state = await config.all()
+            await config.governor_id.set(None)
+            await config.linked_at.set(0)
+            warnings = await self._apply_link(member, await self.config.guild(member.guild).all(), state)
+            remaining = await config.all()
+            if (not remaining["assigned_roles"] and remaining["applied_nick"] is None
+                    and remaining["pending_nick"] is None):
+                await config.clear()
+        return warnings
+
+    @commands.command(name="unlink", ignore_extra=False)
+    @commands.guild_only()
+    async def unlink(self, ctx):
+        """Unlink your account, remove cog-assigned roles and restore its previous nickname."""
+        warnings = await self._unlink_account(ctx.author)
+        await ctx.send("Account unlinked. " + (" ".join(warnings) if warnings else
+                       "Linked-role and nickname cleanup completed."),
+                       allowed_mentions=discord.AllowedMentions.none())
+
+    @ks.group(name="linkset", invoke_without_command=True)
+    @commands.admin_or_permissions(administrator=True)
+    async def linkset(self, ctx):
+        """Configure existing non-privileged roles for UNVERIFIED self-service links."""
+        await ctx.send_help()
+
+    @linkset.command(name="role")
+    async def linkset_role(self, ctx, role: Optional[discord.Role] = None):
+        """Select an existing linked-player role. Omit role to disable assignment."""
+        if role is not None:
+            self._validate_link_role(ctx, role)
+        await self._change(ctx, linked_role=role.id if role else None)
+
+    @linkset.command(name="alliance")
+    async def linkset_alliance(self, ctx, role: Optional[discord.Role] = None):
+        """Select a role for the configured kingdom/tag. Omit role to disable."""
+        if role is not None:
+            self._validate_link_role(ctx, role)
+        await self._change(ctx, alliance_role=role.id if role else None)
+
+    @linkset.command(name="nickname")
+    async def linkset_nickname(self, ctx, enabled: bool):
+        """Enable/disable game-name server nickname sync; applied on next link/sync."""
+        await self._change(ctx, link_nickname=enabled)
+
+    @linkset.command(name="status")
+    async def linkset_status(self, ctx):
+        """Show linking settings, without listing member associations."""
+        settings = await self._settings(ctx)
+        await ctx.send(f"Links are UNVERIFIED. Nickname sync: {settings['link_nickname']}\n"
+                       f"Linked role ID: {settings['linked_role']}\n"
+                       f"Alliance role ID: {settings['alliance_role']} "
+                       f"(K{settings['kingdom']} / {text(settings['alliance'])})\n"
+                       "Changes apply on the next link or sync; there is no scheduled sync.",
+                       allowed_mentions=discord.AllowedMentions.none())
+
+    @linkset.command(name="clear")
+    async def linkset_clear(self, ctx, member: discord.Member):
+        """Clear a disputed link and clean up that member's cog-assigned roles/nickname."""
+        if ctx.author.id != ctx.guild.owner_id and member.top_role >= ctx.author.top_role:
+            raise ValueError("You may only clear links for members below your highest role.")
+        warnings = await self._unlink_account(member)
+        await ctx.send("Member link cleared. " + (" ".join(warnings) if warnings else
+                       "Linked-role and nickname cleanup completed."),
+                       allowed_mentions=discord.AllowedMentions.none())
 
     @ks.command(name="player")
     async def player(self, ctx, governor_id: int):

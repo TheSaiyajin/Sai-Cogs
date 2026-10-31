@@ -14,7 +14,7 @@ import pytest
 from kingshot import setup
 from kingshot import api as api_module
 from kingshot.api import APIError, BOARDS, MightyAPI, alliance_tag, identifier, retry_delay
-from kingshot.kingshot import GUILD_DEFAULTS, Kingshot
+from kingshot.kingshot import GUILD_DEFAULTS, MEMBER_DEFAULTS, Kingshot
 from kingshot.views import calendar, kvk_embed, number, pages, records, roster
 
 
@@ -352,26 +352,45 @@ class Value:
 
 
 class Group:
-    def __init__(self, storage):
+    def __init__(self, storage, defaults=GUILD_DEFAULTS):
         self.storage = storage
+        self.defaults = defaults
 
     async def all(self):
         return deepcopy(self.storage)
 
     def get_attr(self, key):
-        assert key in GUILD_DEFAULTS, f"Unregistered Config field {key}"
+        assert key in self.defaults, f"Unregistered Config field {key}"
         return Value(self.storage, key)
 
     def __getattr__(self, key):
         return self.get_attr(key)
 
+    async def clear(self):
+        self.storage.clear()
+        self.storage.update(deepcopy(self.defaults))
+
 
 class MemoryConfig:
     def __init__(self):
         self.guilds = {}
+        self.members = {}
 
     def register_guild(self, **kwargs):
         assert kwargs == GUILD_DEFAULTS
+
+    def register_member(self, **kwargs):
+        assert kwargs == MEMBER_DEFAULTS
+
+    def member(self, member):
+        return self.member_from_ids(member.guild.id, member.id)
+
+    def member_from_ids(self, guild_id, member_id):
+        storage = self.members.setdefault(guild_id, {}).setdefault(member_id, deepcopy(MEMBER_DEFAULTS))
+        return Group(storage, MEMBER_DEFAULTS)
+
+    async def all_members(self, guild=None):
+        return deepcopy(self.members if guild is None else self.members.get(guild.id, {}))
 
     def guild(self, guild):
         return self.guild_from_id(guild.id)
@@ -902,17 +921,402 @@ def test_setup_failure_closes_session(cog_context):
     assert captured[0].api.session.closed
 
 
+class LinkRole:
+    def __init__(self, role_id, position, permissions=None, managed=False, default=False):
+        self.id, self.position = role_id, position
+        self.permissions = permissions or discord.Permissions.none()
+        self.managed, self.default = managed, default
+
+    def __ge__(self, other):
+        return self.position >= other.position
+
+    def is_default(self):
+        return self.default
+
+
+@pytest.fixture
+def linking_context(cog_context):
+    cog, ctx, config, _, _ = cog_context
+    guild = ctx.guild
+    linked = LinkRole(101, 1, discord.Permissions(view_channel=True, send_messages=True))
+    alliance = LinkRole(102, 2)
+    ordinary = LinkRole(103, 1)
+    guild_roles = {r.id: r for r in (linked, alliance, ordinary)}
+    guild.get_role = guild_roles.get
+    guild.owner_id = 999
+    guild.me.guild_permissions = discord.Permissions(manage_nicknames=True, manage_roles=True)
+    guild.me.top_role = LinkRole(200, 10)
+    member = SimpleNamespace(id=7, guild=guild, nick="Previous nickname", roles=[ordinary],
+                             top_role=LinkRole(150, 5), send=AsyncMock())
+
+    async def add_roles(role, **kwargs):
+        if role not in member.roles:
+            member.roles.append(role)
+
+    async def remove_roles(role, **kwargs):
+        member.roles = [r for r in member.roles if r.id != role.id]
+
+    async def edit(**kwargs):
+        member.nick = kwargs["nick"]
+    member.add_roles = AsyncMock(side_effect=add_roles)
+    member.remove_roles = AsyncMock(side_effect=remove_roles)
+    member.edit = AsyncMock(side_effect=edit)
+    guild.fetch_member = AsyncMock(return_value=member)
+    ctx.author = member
+    config.guilds[1].update(linked_role=101, alliance_role=102)
+    return cog, ctx, config, guild_roles
+
+
+def test_link_sync_and_unlink(linking_context):
+    cog, ctx, config, _ = linking_context
+    invoke(cog, ctx, "link", 1234)
+    state = run(config.member(ctx.author).all())
+    assert state["governor_id"] == 1234 and state["linked_at"] > 0
+    assert state["assigned_roles"] == [101, 102]
+    assert state["original_nick"] == "Previous nickname" and state["applied_nick"] == "Governor"
+    assert ctx.author.nick == "Governor" and {r.id for r in ctx.author.roles} == {101, 102, 103}
+    assert "UNVERIFIED" in ctx.send.call_args.kwargs["embed"].title
+    assert "does not verify" in ctx.send.call_args.kwargs["embed"].description
+    cog.api.player.return_value["player"]["nick_name"] = "New game name"
+    invoke(cog, ctx, "sync")
+    assert ctx.author.nick == "New game name"
+    assert ctx.author.add_roles.await_count == 2
+    invoke(cog, ctx, "unlink")
+    assert ctx.author.nick == "Previous nickname" and [r.id for r in ctx.author.roles] == [103]
+    assert run(config.member(ctx.author).all()) == MEMBER_DEFAULTS
+
+
+@pytest.mark.parametrize("kid,tag,expected", [(570, "VIL", {101, 102, 103}),
+                                            (571, "VIL", {101, 103}),
+                                            (570, "Vil", {101, 103}), (570, None, {101, 103})])
+def test_link_alliance_roles_match_exact_kingdom_and_tag(linking_context, kid, tag, expected):
+    cog, ctx, _, _ = linking_context
+    cog.api.player.return_value["player"].update(kid=kid, alliance={"abbr": tag} if tag else None)
+    invoke(cog, ctx, "link", 1234)
+    assert {r.id for r in ctx.author.roles} == expected
+
+
+def test_sync_removes_departed_alliance_role(linking_context):
+    cog, ctx, config, _ = linking_context
+    invoke(cog, ctx, "link", 1234)
+    cog.api.player.return_value["player"]["alliance"] = None
+    invoke(cog, ctx, "sync")
+    assert {r.id for r in ctx.author.roles} == {101, 103}
+    assert run(config.member(ctx.author).assigned_roles()) == [101]
+
+
+def test_preexisting_roles_and_manual_nickname_are_preserved(linking_context):
+    cog, ctx, config, roles = linking_context
+    ctx.author.roles.append(roles[101])
+    invoke(cog, ctx, "link", 1234)
+    assert run(config.member(ctx.author).assigned_roles()) == [102]
+    ctx.author.nick = "Moderator-changed nickname"
+    invoke(cog, ctx, "unlink")
+    assert ctx.author.nick == "Moderator-changed nickname"
+    assert {r.id for r in ctx.author.roles} == {101, 103}
+
+
+def test_disabled_nickname_and_roles(linking_context):
+    cog, ctx, config, _ = linking_context
+    config.guilds[1].update(linked_role=None, alliance_role=None, link_nickname=False)
+    invoke(cog, ctx, "link", 1234)
+    assert ctx.author.nick == "Previous nickname"
+    assert not ctx.author.edit.called and not ctx.author.add_roles.called
+    assert run(config.member(ctx.author).governor_id()) == 1234
+
+
+def test_disable_nickname_restores_on_sync(linking_context):
+    cog, ctx, config, _ = linking_context
+    invoke(cog, ctx, "link", 1234)
+    invoke(cog, ctx, "linkset_nickname", False)
+    invoke(cog, ctx, "sync")
+    assert ctx.author.nick == "Previous nickname"
+    assert run(config.member(ctx.author).applied_nick()) is None
+
+
+@pytest.mark.parametrize("failure", [APIError(401, "auth"), APIError(404, "missing")])
+def test_failed_lookup_does_not_link_or_change_member(linking_context, failure):
+    cog, ctx, config, _ = linking_context
+    cog.api.player.side_effect = failure
+    with pytest.raises(APIError):
+        invoke(cog, ctx, "link", 1234)
+    assert run(config.member(ctx.author).all()) == MEMBER_DEFAULTS
+    assert not ctx.author.edit.called and not ctx.author.add_roles.called
+
+
+@pytest.mark.parametrize("change", [{"governor_id": 9999}, {"nick_name": None}, {"nick_name": " "}])
+def test_invalid_player_cannot_link(linking_context, change):
+    cog, ctx, config, _ = linking_context
+    cog.api.player.return_value["player"].update(change)
+    with pytest.raises(APIError):
+        invoke(cog, ctx, "link", 1234)
+    assert run(config.member(ctx.author).governor_id()) is None
+
+
+def test_missing_alliance_data_keeps_current_roles(linking_context):
+    cog, ctx, config, _ = linking_context
+    invoke(cog, ctx, "link", 1234)
+    del cog.api.player.return_value["player"]["alliance"]
+    before = run(config.member(ctx.author).all())
+    with pytest.raises(APIError):
+        invoke(cog, ctx, "sync")
+    assert run(config.member(ctx.author).all()) == before
+    assert not ctx.author.remove_roles.called
+
+
+@pytest.mark.parametrize("change", [{"alliance": []}, {"alliance": {}}, {"kid": None}])
+def test_malformed_alliance_membership_cannot_assign_or_remove_roles(linking_context, change):
+    cog, ctx, config, _ = linking_context
+    invoke(cog, ctx, "link", 1234)
+    cog.api.player.return_value["player"].update(change)
+    with pytest.raises((ValueError, APIError)):
+        invoke(cog, ctx, "sync")
+    assert run(config.member(ctx.author).assigned_roles()) == [101, 102]
+    assert not ctx.author.remove_roles.called
+
+
+def test_failed_nickname_sync_keeps_last_applied_name_for_unlink(linking_context):
+    cog, ctx, config, _ = linking_context
+    invoke(cog, ctx, "link", 1234)
+    cog.api.player.return_value["player"]["nick_name"] = "Changed name"
+    saved_edit = ctx.author.edit.side_effect
+    ctx.author.edit.side_effect = forbidden()
+    invoke(cog, ctx, "sync")
+    state = run(config.member(ctx.author).all())
+    assert state["applied_nick"] == "Governor" and state["pending_nick"] == "Changed name"
+    ctx.author.edit.side_effect = saved_edit
+    invoke(cog, ctx, "unlink")
+    assert ctx.author.nick == "Previous nickname"
+    assert run(config.member(ctx.author).all()) == MEMBER_DEFAULTS
+
+
+def test_interrupted_nickname_change_can_be_reconciled_after_reload(linking_context):
+    cog, ctx, config, _ = linking_context
+
+    async def ambiguous_edit(**kwargs):
+        ctx.author.nick = kwargs["nick"]
+        raise discord.HTTPException(SimpleNamespace(status=500, reason="Server Error"), "ambiguous")
+
+    ctx.author.edit.side_effect = ambiguous_edit
+    invoke(cog, ctx, "link", 1234)
+    assert run(config.member(ctx.author).pending_nick()) == "Governor"
+    reloaded = Kingshot(cog.bot)
+    reloaded.api.player = cog.api.player
+    invoke(reloaded, ctx, "sync")
+    assert run(config.member(ctx.author).applied_nick()) == "Governor"
+    assert run(config.member(ctx.author).pending_nick()) is None
+    assert run(config.member(ctx.author).original_nick()) == "Previous nickname"
+
+
+def test_link_concurrency_reserves_governor_id(linking_context):
+    cog, ctx, config, _ = linking_context
+    second_ctx = SimpleNamespace(guild=ctx.guild, author=SimpleNamespace(id=8, guild=ctx.guild),
+                                 send=AsyncMock())
+    ctx.guild.fetch_member.side_effect = lambda uid: ctx.author if uid == 7 else second_ctx.author
+
+    async def scenario():
+        results = await asyncio.gather(cog._link_account(ctx, 1234),
+                                       cog._link_account(second_ctx, 1234), return_exceptions=True)
+        assert results[0] is None and isinstance(results[1], ValueError)
+        assert await config.member_from_ids(1, 7).governor_id() == 1234
+        assert await config.member_from_ids(1, 8).governor_id() is None
+        assert cog.api.player.await_count == 1
+    run(scenario())
+
+
+def test_link_cleanup_uses_fresh_members_not_stale_gateway_cache(linking_context):
+    cog, ctx, config, roles = linking_context
+    server = {"nick": "Previous nickname", "roles": [roles[103]]}
+
+    async def fetch_member(uid):
+        fresh = SimpleNamespace(id=uid, guild=ctx.guild, nick=server["nick"],
+                                roles=list(server["roles"]), top_role=ctx.author.top_role)
+
+        async def edit(**kwargs):
+            server["nick"] = kwargs["nick"]  # Member.edit returns a new member, not a cache mutation.
+
+        async def add_roles(role, **kwargs):
+            server["roles"].append(role)
+
+        async def remove_roles(role, **kwargs):
+            server["roles"] = [r for r in server["roles"] if r.id != role.id]
+        fresh.edit = edit
+        fresh.add_roles = add_roles
+        fresh.remove_roles = remove_roles
+        return fresh
+    ctx.guild.fetch_member.side_effect = fetch_member
+    invoke(cog, ctx, "link", 1234)
+    assert ctx.author.nick == "Previous nickname"  # Gateway cache has not caught up.
+    assert server["nick"] == "Governor"
+    invoke(cog, ctx, "unlink")
+    assert server["nick"] == "Previous nickname"
+    assert [r.id for r in server["roles"]] == [103]
+    assert run(config.member(ctx.author).all()) == MEMBER_DEFAULTS
+
+
+def test_nickname_length_and_missing_permission(linking_context):
+    cog, ctx, config, _ = linking_context
+    cog.api.player.return_value["player"]["nick_name"] = "x" * 100
+    ctx.guild.me.guild_permissions.manage_nicknames = False
+    invoke(cog, ctx, "link", 1234)
+    assert ctx.author.nick == "Previous nickname"
+    assert "Manage Nicknames" in ctx.send.call_args.kwargs["embed"].fields[-1].value
+    ctx.guild.me.guild_permissions.manage_nicknames = True
+    invoke(cog, ctx, "sync")
+    assert ctx.author.nick == "x" * 32
+    assert run(config.member(ctx.author).original_nick()) == "Previous nickname"
+
+
+def test_discord_failures_are_explicit_and_retryable(linking_context):
+    cog, ctx, config, _ = linking_context
+    saved_add, saved_edit = ctx.author.add_roles.side_effect, ctx.author.edit.side_effect
+    ctx.author.add_roles.side_effect = forbidden()
+    ctx.author.edit.side_effect = forbidden()
+    invoke(cog, ctx, "link", 1234)
+    assert run(config.member(ctx.author).governor_id()) == 1234
+    output = ctx.send.call_args.kwargs["embed"].fields[-1].value
+    assert "could not assign" in output and "could not change" in output
+    ctx.author.add_roles.side_effect = saved_add
+    ctx.author.edit.side_effect = saved_edit
+    invoke(cog, ctx, "sync")
+    assert ctx.author.nick == "Governor" and {r.id for r in ctx.author.roles} == {101, 102, 103}
+    ctx.author.remove_roles.side_effect = forbidden()
+    invoke(cog, ctx, "unlink")
+    assert run(config.member(ctx.author).governor_id()) is None
+    assert "retry sync/unlink" in ctx.send.call_args.args[0]
+    assert run(config.member(ctx.author).assigned_roles()) == [101, 102]
+
+
+def test_duplicate_links_are_guild_local_and_do_not_prove_ownership(linking_context):
+    cog, ctx, config, _ = linking_context
+    run(config.member_from_ids(2, 8).governor_id.set(1234))
+    invoke(cog, ctx, "link", 1234)
+    run(config.member(ctx.author).clear())
+    run(config.member_from_ids(1, 8).governor_id.set(1234))
+    cog.api.player.reset_mock()
+    with pytest.raises(ValueError, match="already linked"):
+        invoke(cog, ctx, "link", 1234)
+    assert not cog.api.player.called
+    assert run(config.member(ctx.author).governor_id()) is None
+
+
+def test_sync_requires_link(linking_context):
+    cog, ctx, _, _ = linking_context
+    with pytest.raises(ValueError, match="Link an account first"):
+        invoke(cog, ctx, "sync")
+    assert not cog.api.player.called
+
+
+@pytest.mark.parametrize("permission", ["administrator", "manage_roles", "manage_guild",
+                                      "manage_messages", "ban_members", "kick_members",
+                                      "manage_nicknames", "mention_everyone"])
+def test_privileged_roles_cannot_be_configured(linking_context, permission):
+    cog, ctx, _, roles = linking_context
+    roles[101].permissions = discord.Permissions(**{permission: True})
+    with pytest.raises(ValueError, match="privileged"):
+        invoke(cog, ctx, "linkset_role", roles[101])
+    with pytest.raises(ValueError, match="privileged"):
+        invoke(cog, ctx, "linkset_alliance", roles[101])
+
+
+@pytest.mark.parametrize("kind", ["managed", "default", "bot_hierarchy", "admin_hierarchy",
+                                 "missing_permission"])
+def test_unmanageable_roles_cannot_be_configured(linking_context, kind):
+    cog, ctx, _, roles = linking_context
+    role = roles[101]
+    if kind == "managed":
+        role.managed = True
+    elif kind == "default":
+        role.default = True
+    elif kind == "bot_hierarchy":
+        role.position = 10
+    elif kind == "admin_hierarchy":
+        role.position = 5
+    else:
+        ctx.guild.me.guild_permissions.manage_roles = False
+    with pytest.raises(ValueError):
+        invoke(cog, ctx, "linkset_role", role)
+
+
+def test_role_configuration_and_revalidation(linking_context):
+    cog, ctx, config, roles = linking_context
+    invoke(cog, ctx, "linkset_role", roles[101])
+    invoke(cog, ctx, "linkset_alliance", roles[102])
+    invoke(cog, ctx, "linkset_status")
+    assert "UNVERIFIED" in ctx.send.call_args.args[0]
+    invoke(cog, ctx, "link", 1234)
+    roles[101].permissions = discord.Permissions(administrator=True)
+    invoke(cog, ctx, "sync")
+    assert 101 not in {r.id for r in ctx.author.roles}
+    assert "privileged" in ctx.send.call_args.kwargs["embed"].fields[-1].value
+    invoke(cog, ctx, "linkset_alliance")
+    invoke(cog, ctx, "sync")
+    assert 102 not in {r.id for r in ctx.author.roles}
+    assert config.guilds[1]["alliance_role"] is None
+
+
+def test_deleted_role_cleanup(linking_context):
+    cog, ctx, config, roles = linking_context
+    invoke(cog, ctx, "link", 1234)
+    del roles[102]
+    invoke(cog, ctx, "unlink")
+    assert run(config.member(ctx.author).all()) == MEMBER_DEFAULTS
+
+
+def test_admin_clear_and_data_deletion(linking_context):
+    cog, ctx, config, _ = linking_context
+    invoke(cog, ctx, "link", 1234)
+    member = ctx.author
+    admin = SimpleNamespace(id=12, top_role=LinkRole(201, 6))
+    ctx.author = admin
+    invoke(cog, ctx, "linkset_clear", member)
+    assert run(config.member(member).governor_id()) is None and member.nick == "Previous nickname"
+    ctx.author = member
+    invoke(cog, ctx, "link", 1234)
+    run(config.member_from_ids(2, 7).governor_id.set(5678))
+    run(config.member_from_ids(2, 8).governor_id.set(1000))
+    run(cog.red_delete_data_for_user(requester="discord_deleted_user", user_id=7))
+    assert run(config.member_from_ids(1, 7).all()) == MEMBER_DEFAULTS
+    assert run(config.member_from_ids(2, 7).all()) == MEMBER_DEFAULTS
+    assert run(config.member_from_ids(2, 8).governor_id()) == 1000
+
+
+def test_admin_cannot_clear_equal_hierarchy(linking_context):
+    cog, ctx, _, _ = linking_context
+    with pytest.raises(ValueError, match="highest role"):
+        invoke(cog, ctx, "linkset_clear", ctx.author)
+
+
 def test_real_red_command_registration():
     command = Kingshot.ks
     expected = {"player", "heroes", "gear", "compare", "ranks", "alliance", "members", "top",
                 "inactive", "progress", "changes", "kingdom", "kvk", "score", "kvkdays",
-                "matchups", "events", "usage", "auto", "remind"}
+                "matchups", "events", "usage", "auto", "remind", "linkset"}
     assert set(command.all_commands) == expected
     from redbot.core.commands.requires import PrivilegeLevel
     assert Kingshot.ksset.requires.privilege_level == PrivilegeLevel.BOT_OWNER
     assert Kingshot.usage.requires.privilege_level == PrivilegeLevel.BOT_OWNER
     assert Kingshot.auto.requires.privilege_level == PrivilegeLevel.ADMIN
     assert Kingshot.remind.requires.privilege_level == PrivilegeLevel.ADMIN
+    assert Kingshot.linkset.requires.privilege_level == PrivilegeLevel.ADMIN
+    assert set(Kingshot.linkset.all_commands) == {"role", "alliance", "nickname", "status", "clear"}
+    assert set(Kingshot.link.clean_params) == {"governor_id"}
+
+
+@pytest.mark.parametrize("command,arguments,expected", [("link", "1234", [1234]),
+                                                       ("sync", "", []), ("unlink", "", [])])
+def test_real_red_link_command_parsing(linking_context, monkeypatch, command, arguments, expected):
+    from discord.ext.commands.view import StringView
+    from redbot.core import commands
+
+    cog, _, _, _ = linking_context
+    cmd = getattr(Kingshot, command)
+    monkeypatch.setattr(cmd, "cog", cog)
+    message = MagicMock()
+    message.attachments = []
+    parsed = commands.Context(message=message, bot=cog.bot, view=StringView(arguments), command=cmd)
+    run(cmd._parse_arguments(parsed))
+    assert parsed.args[2:] == expected
 
 
 def test_real_red_load_unload_and_persistent_config(monkeypatch, tmp_path):
@@ -936,6 +1340,10 @@ def test_real_red_load_unload_and_persistent_config(monkeypatch, tmp_path):
             first = bot.get_cog("Kingshot")
             worker = first._worker
             assert bot.get_command("ks player") is not None
+            assert bot.get_command("link") is not None
+            assert bot.get_command("sync") is not None
+            assert bot.get_command("unlink") is not None
+            await first.config.member_from_ids(1, 7).governor_id.set(1234)
             await first.config.guild_from_id(1).message_id.set(555)
             await first.config.guild_from_id(1).kingdom.set(571)
             await bot.remove_cog("Kingshot")
@@ -946,6 +1354,9 @@ def test_real_red_load_unload_and_persistent_config(monkeypatch, tmp_path):
             assert await second.config.guild_from_id(1).message_id() == 555
             assert await second.config.guild_from_id(1).kingdom() == 571
             assert await second.config.guild_from_id(2).kingdom() == 570
+            assert await second.config.member_from_ids(1, 7).governor_id() == 1234
+            await second.red_delete_data_for_user(requester="user", user_id=7)
+            assert await second.config.member_from_ids(1, 7).governor_id() is None
             await bot.remove_cog("Kingshot")
             assert second._worker is None and second.api.session.closed
     run(scenario())

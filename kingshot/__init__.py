@@ -1,7 +1,9 @@
 __red_end_user_data_statement__ = (
     "Stores guild settings, dashboard message IDs, public game roster/power snapshots, "
-    "manual event schedules and reminder delivery markers. No Discord user profiles or "
-    "API keys are stored by this cog. The bot-wide API key uses Red's shared token storage."
+    "manual event schedules and reminder delivery markers. Self-service linking stores "
+    "per-server Discord member/governor associations, link timestamps, cog-assigned role "
+    "IDs and original/applied/pending nicknames for cleanup. Links do not verify ownership. "
+    "Red data deletion removes member linking records. API keys use Red's shared token storage."
 )
 
 

@@ -61,7 +61,7 @@ All `ks` commands require a server. Normal members may read statistics.
 | `[p]ks heroes <governor_id>` | Recorded **arena defence team**, levels, stars, power, equipped upgrades/mastery and widget |
 | `[p]ks gear <governor_id>` | Governor gear, quality, tier, stars, strength upgrades, score and combat; hidden gear is identified |
 | `[p]ks compare <player1> <player2>` | Recorded power, TC, kills, VIP and kingdom, with independent data ages |
-| `[p]ks ranks [board] [kingdom_id]` | Up to 100 leaderboard entries, paginated; default `personal_power` |
+| `[p]ks ranks [board] [kingdom_id]` | Up to 100 leaderboard entries, paginated; defaults to `personal_power`. Choose another board such as `kills`, `mystic_trial`, `town_center` or any supported slug below. |
 | `[p]ks alliance [kingdom_id tag]` | Alliance overview; omit both arguments for configured alliance |
 | `[p]ks members [kingdom_id tag]` | Paginated roster, IDs, alliance ranks, power and TC |
 | `[p]ks top [kingdom_id tag]` | Ten strongest members with available power |
@@ -105,6 +105,28 @@ saved kingdom/alliance or snapshot history. `ks progress` and `ks changes` still
 report only the configured alliance's stored snapshots. Player commands already
 look up governor IDs independently of kingdom. All kingdoms share the existing
 API key, cache and subscription allowance; events/KvK still require Mighty.
+
+### Choosing a leaderboard
+
+`personal_power` is only the default, not the only available leaderboard.
+Replace `[board]` with a supported slug to view kills, Mystic Trial, Town Center,
+hero power, alliance power and other rankings:
+
+```text
+[p]ks ranks
+[p]ks ranks kills
+[p]ks ranks mystic_trial
+[p]ks ranks town_center
+[p]ks ranks hero_total
+[p]ks ranks alliance_power
+[p]ks ranks kills 571
+[p]ks ranks mystic_trial 571
+```
+
+Omitting the board shows personal power in your configured kingdom. Supplying
+only a board uses the configured kingdom; adding a kingdom ID queries that
+kingdom instead. Use the exact slug `mystic_trial` for Mystic Trial, not `mystic`.
+Changing the board is a one-off query and does not change the default.
 
 Supported leaderboard slugs:
 

@@ -482,7 +482,9 @@ def test_compare_all_rankings_and_missing_values(cog_context, monkeypatch):
     mock_menu = AsyncMock()
     monkeypatch.setattr("kingshot.kingshot.menu", mock_menu)
     invoke(cog, ctx, "compare", 1234, 5678)
-    output = mock_menu.call_args.args[1]
+    assert not mock_menu.called
+    output = [call.kwargs["embed"] for call in ctx.send.call_args_list]
+    assert len(output) >= 2
     description = "\n".join(page.description or "" for page in output)
     assert "Personal power" in description and "12,000,000 (kingdom rank: 5)" in description
     assert "Mystic Trial stage" in description and "800 (kingdom rank: 9)" in description
@@ -498,6 +500,39 @@ def test_compare_missing_rank_sections():
     assert len(output) == 2 and len(output[0].fields) == len(PLAYER_STATS)
     assert "Unavailable" in output[1].description
     assert "own kingdom" in output[1].description
+
+
+def test_required_metrics_in_both_comparisons():
+    first = deepcopy(PLAYER)
+    first["ranks"] = {"power": 100, "mystic_trial": 200, "leaderboards": [
+        {"name": "Hero Power", "value": 300, "kingdom_rank": 1},
+        {"name": "Master Power", "value": 400, "kingdom_rank": 2},
+        {"name": "Island Prosperity", "value": 500, "kingdom_rank": 3}]}
+    output = comparison_pages(first, PLAYER, PLAYER_STATS)
+    description = "\n".join(card.description or "" for card in output)
+    for label in ("Personal power", "Hero Power", "Mystic Trial", "Master Power", "Island Prosperity"):
+        assert label in description
+    assert output[0].fields[0].name == "Total power (player profile)"
+    assert "300 (kingdom rank: 1)" in description
+    assert "400 (kingdom rank: 2)" in description
+    assert "500 (kingdom rank: 3)" in description
+    kingdom = dict(power=100, gov_power=200, hero_power=300, hero_total=350,
+                   master_power=400, mystic_trial=450, island_prosperity=500)
+    scout = scout_embeds((570, 463), [kingdom, {}], [{}, {}], [{}, {}])[0]
+    for label, value in (("Total power", 100), ("Personal power total", 200),
+                         ("Hero power", 300), ("Master power", 400),
+                         ("Mystic Trial total (not an individual stage)", 450),
+                         ("Island prosperity", 500)):
+        field = next(field for field in scout.fields if field.name == label)
+        assert f"K570: {value}" in field.value and "K463: Unavailable" in field.value
+    assert len(scout.fields) <= 25 and len(scout) <= 6000
+
+
+def test_compare_explicit_missing_requested_categories():
+    descriptions = "\n".join(card.description or "" for card in
+                             comparison_pages(PLAYER, PLAYER, PLAYER_STATS))
+    for label in ("Hero Power", "Master Power", "Island Prosperity"):
+        assert f"**{label}**\nLeft: Unavailable" in descriptions
 
 
 def scout_fixture_rows(board, count=100):

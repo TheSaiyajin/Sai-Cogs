@@ -48,7 +48,7 @@ and sufficient role hierarchy. Linking does not prove ownership; statistics
 remain public. See the cog README for setup, cleanup and data-deletion details.
 `[p]ks compare <player1> <player2>` also compares all returned player leaderboard
 values and kingdom positions (personal power, kills, Mystic Trial stage, pet power
-and other available boards), with pagination and independent data ages. Missing
+and other available boards), in separate messages with independent data ages. Missing
 data is labelled unavailable; ranks are relative to each player's own kingdom.
 Use `[p]ks scout 2312 2316` (alias `ks comparekingdoms`) to compare kingdom totals
 and view both kingdoms' top alliances, power players, Town Center levels and
@@ -57,6 +57,9 @@ Mystic Trial stages in five separate messages. The owner-only
 for unexpected leaderboard formats (default board `mystic_trial`).
 Cached report data is not a KvK winner prediction or a
 verified recent-activity measurement.
+Both player and kingdom comparisons explicitly show total/personal power, hero
+power, Mystic Trial, master power and island prosperity, with missing values
+marked unavailable rather than inferred.
 Administrators can enable `[p]ks auto enable` and `[p]ks remind enable` after
 configuring a channel. Refresh intervals have a five-minute minimum. Inactivity
 reporting is disabled because the API's player activity fields are stale.

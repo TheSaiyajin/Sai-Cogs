@@ -725,6 +725,102 @@ def test_boardtest_identifies_safe_repeated_records(cog_context):
     assert "Scout parser: accepted 100 rows." in message
 
 
+def test_ranks_reuses_duplicate_safe_sorted_parser(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    rows = scout_fixture_rows("personal_power", count=3)
+    cog.api.ranks = AsyncMock(return_value={"rows": rows, "boards": [{"entries": deepcopy(rows)}]})
+    invoke(cog, ctx, "ranks", "personal_power", 570)
+    description = ctx.send.call_args.kwargs["embed"].description
+    assert description.count("Governor") == 3
+    assert description.index("Governor 2") < description.index("Governor 0")
+
+
+def test_alliance_kills_uses_alliance_identity():
+    rows = [{"aid": 1, "abbr": "ABC", "score": 100}]
+    assert scout_rows({"rows": rows, "entries": deepcopy(rows)}, "alliance_kills") == rows
+
+
+def test_matchups_does_not_repeat_identical_envelope_records(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.matchups = AsyncMock(return_value={"matchups": [MATCHUP], "pairs": [deepcopy(MATCHUP)]})
+    invoke(cog, ctx, "matchups")
+    assert ctx.send.call_args.kwargs["embed"].description.count("K570 vs K39") == 1
+
+
+def test_scout_reuses_available_tags_by_uid_and_alliance_id_without_requests(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    async def ranks(kid, board):
+        if board == "alliance_power":
+            return {"rows": [{"aid": 50, "abbr": "ABC", "name": "Alliance", "score": 1000}]}
+        if board == "personal_power":
+            return {"rows": [{"uid": 1, "abbr": "XYZ", "nick_name": "Player One", "score": 100}]}
+        return {"rows": [{"uid": 1, "nick_name": "Player One", "score": 100},
+                         {"uid": 2, "alliance": {"aid": 50}, "nick_name": "Player Two", "score": 50}]}
+    cog.api.ranks = AsyncMock(side_effect=ranks)
+    invoke(cog, ctx, "scout", 570, 571)
+    output = [call.kwargs["embed"] for call in ctx.send.call_args_list]
+    for card in output[2:6]:
+        for field in card.fields:
+            assert "[XYZ] Player One" in field.value
+            assert "[ABC] Player Two" in field.value
+    assert not cog.api.player.called and not cog.api.alliance.called
+    assert cog.api.ranks.await_count == 12
+
+
+def test_scout_ambiguous_or_no_alliance_does_not_inherit_tag():
+    boards = {
+        "personal_power": [{"uid": 1, "abbr": "ABC", "score": 100},
+                           {"uid": 2, "abbr": "ABC", "score": 100}],
+        "hero_total": [{"uid": 1, "abbr": "XYZ", "score": 100}],
+        "pet_power": [{"uid": 1, "nick_name": "Conflict", "score": 100},
+                      {"uid": 2, "nick_name": "No alliance", "alliance": None, "score": 100}],
+    }
+    output = scout_embeds((570, 571), [boards, boards], [{}, {}])
+    pet = next(card for card in output if card.title == "Top 10 Pet Power")
+    assert "[—] Conflict" in pet.fields[0].value
+    assert "[—] No alliance" in pet.fields[0].value
+    assert "abbr" not in boards["pet_power"][0]
+
+
+def test_kvktest_pinpoints_mismatched_score_identity_without_values(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.scores.return_value = dict(SCORES, kingdom=999, season="DO-NOT-SHOW")
+    invoke(cog, ctx, "kvktest", 570)
+    output = "\n".join(call.kwargs["embed"].description for call in ctx.send.call_args_list)
+    assert "scores: HTTP status 200; API code ok" in output
+    assert "scores.season: str" in output
+    assert "Scores kingdom matches request: False" in output
+    assert "Scores season matches matchup: False" in output
+    assert "KvK renderer error code: schema" in output
+    assert "DO-NOT-SHOW" not in output and "999" not in output
+    assert "166483680" not in output
+    assert cog.api.kvk.await_count == 1 and cog.api.scores.await_count == 1
+
+
+def test_kvktest_reports_valid_response_and_day_types(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    invoke(cog, ctx, "kvktest", 570)
+    output = "\n".join(call.kwargs["embed"].description for call in ctx.send.call_args_list)
+    assert "KvK renderer: accepted matchup and scores" in output
+    assert "scores.days count: 1" in output
+    assert "scores.days.kingdom_score: int=1" in output
+
+
+def test_kvktest_auth_error_does_not_make_extra_requests(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.kvk.side_effect = APIError(403, "forbidden")
+    invoke(cog, ctx, "kvktest", 570)
+    assert "HTTP status 403; API code forbidden" in ctx.send.call_args.kwargs["embed"].description
+    assert not cog.api.scores.called
+
+
+def test_score_schema_error_points_to_diagnostic(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    ctx.command = SimpleNamespace(name="score")
+    run(cog.cog_command_error(ctx, APIError(200, "schema")))
+    assert "ks kvktest <kingdom_id>" in ctx.send.call_args.args[0]
+
+
 def test_scout_long_names_all_ten_rows_fit_and_higher_labels():
     boards = {board: scout_rows({"rows": scout_fixture_rows(board)}, board)
               for board, _, _ in SCOUT_BOARDS}
@@ -1739,12 +1835,13 @@ def test_real_red_command_registration():
     expected = {"player", "heroes", "gear", "compare", "ranks", "alliance", "members", "top",
                 "inactive", "progress", "changes", "kingdom", "kvk", "score", "kvkdays",
                 "matchups", "events", "usage", "auto", "remind", "linkset", "scout",
-                "comparekingdoms", "boardtest"}
+                "comparekingdoms", "boardtest", "kvktest"}
     assert set(command.all_commands) == expected
     from redbot.core.commands.requires import PrivilegeLevel
     assert Kingshot.ksset.requires.privilege_level == PrivilegeLevel.BOT_OWNER
     assert Kingshot.usage.requires.privilege_level == PrivilegeLevel.BOT_OWNER
     assert Kingshot.boardtest.requires.privilege_level == PrivilegeLevel.BOT_OWNER
+    assert Kingshot.kvktest.requires.privilege_level == PrivilegeLevel.BOT_OWNER
     assert Kingshot.auto.requires.privilege_level == PrivilegeLevel.ADMIN
     assert Kingshot.remind.requires.privilege_level == PrivilegeLevel.ADMIN
     assert Kingshot.linkset.requires.privilege_level == PrivilegeLevel.ADMIN

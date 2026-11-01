@@ -91,7 +91,12 @@ class Kingshot(commands.Cog):
     async def cog_command_error(self, ctx, error):
         original = getattr(error, "original", error)
         if isinstance(original, (APIError, ValueError)):
-            await ctx.send(str(original), allowed_mentions=discord.AllowedMentions.none())
+            message = str(original)
+            command = getattr(ctx, "command", None)
+            if (isinstance(original, APIError) and original.code == "schema"
+                    and getattr(command, "name", None) in ("score", "kvkdays", "kvk")):
+                message += "\nOwner diagnostic: ks kvktest <kingdom_id>"
+            await ctx.send(message, allowed_mentions=discord.AllowedMentions.none())
         elif isinstance(original, commands.UserInputError):
             await ctx.send("Invalid, missing or extra argument. See the command's help.")
         elif isinstance(original, discord.Forbidden):
@@ -515,12 +520,12 @@ class Kingshot(commands.Cog):
                            allowed_mentions=discord.AllowedMentions.none())
             return
         rows = records(data, {"score"})
-        identity = "aid" if board == "alliance_power" else "uid"
+        identity = "aid" if board.startswith("alliance_") else "uid"
         identified = records(data, {identity})
         lines = [f"Kingdom {kid}, board {board}", "HTTP status: 200; API code: ok",
                  f"Records containing score: {len(rows)}",
                  f"Records containing {identity}: {len(identified)}"]
-        for key in (identity, "governor_id", "score"):
+        for key in dict.fromkeys((identity, "governor_id", "score", "abbr", "aid", "alliance")):
             counts = {}
             for row in rows:
                 kind = type(row[key]).__name__ if key in row else "missing"
@@ -578,10 +583,7 @@ class Kingshot(commands.Cog):
         """Leaderboard: ranks [board] [kingdom_id]. Defaults to the saved kingdom."""
         kid = await self._kingdom_id(ctx, kid)
         data = await self.api.ranks(kid, board)
-        required = {"aid", "score"} if board.startswith("alliance_") else {"uid", "score"}
-        rows = records(data, required)
-        if not rows:
-            raise APIError(200, "schema")
+        rows = scout_rows(data, board)
         lines = [f"{i}. {text(row.get('abbr', row.get('nick_name')))} "
                  f"({text(row.get('governor_id', row.get('aid')))}) - {number(row.get('score'))}"
                  for i, row in enumerate(rows[:100], 1)]
@@ -712,6 +714,64 @@ class Kingshot(commands.Cog):
         """Preparation days I-V: kvkdays [kingdom_id]. Omit ID for the saved kingdom."""
         await self._score_command(ctx, kid)
 
+    @ks.command(name="kvktest", ignore_extra=False)
+    @commands.is_owner()
+    async def kvktest(self, ctx, kid: Optional[int] = None):
+        """Safe matchup/score field-type and relationship diagnostic; no response values."""
+        kid = await self._kingdom_id(ctx, kid)
+        lines = [f"Kingdom {kid} KvK diagnostic"]
+        payloads = {}
+        for endpoint, request in (("matchup", self.api.kvk), ("scores", self.api.scores)):
+            try:
+                data = await request(kid)
+            except APIError as error:
+                lines.append(f"{endpoint}: HTTP status {error.status}; API code {error.code}")
+                if error.code in ("auth", "forbidden", "rate_limit", "server", "network", "no_key"):
+                    break
+                continue
+            payloads[endpoint] = data
+            lines.append(f"{endpoint}: HTTP status 200; API code ok")
+            for key in ("kingdom", "opponent", "season", "stage", "bye", "score",
+                        "opponent_score", "days"):
+                kind = type(data[key]).__name__ if key in data else "missing"
+                lines.append(f"{endpoint}.{key}: {kind}")
+            for key in ("kingdom", "opponent"):
+                value = data.get(key)
+                if isinstance(value, dict):
+                    kind = type(value["kid"]).__name__ if "kid" in value else "missing"
+                    lines.append(f"{endpoint}.{key}.kid: {kind}")
+            if isinstance(data.get("days"), list):
+                lines.append(f"{endpoint}.days count: {len(data['days'])}")
+                for key in ("day", "name", "status", "kingdom_score", "opponent_score",
+                            "begin_ts", "end_ts"):
+                    counts = {}
+                    for day in data["days"]:
+                        kind = (type(day[key]).__name__ if key in day else "missing"
+                                ) if isinstance(day, dict) else "invalid_record"
+                        counts[kind] = counts.get(kind, 0) + 1
+                    lines.append(f"{endpoint}.days.{key}: " + ", ".join(
+                        f"{kind}={count}" for kind, count in sorted(counts.items())))
+        matchup, scores = payloads.get("matchup"), payloads.get("scores")
+        if matchup is not None:
+            kingdom, opponent = matchup.get("kingdom"), matchup.get("opponent")
+            lines.append(f"Matchup kingdom matches request: "
+                         f"{isinstance(kingdom, dict) and kingdom.get('kid') == kid}")
+            if scores is not None:
+                lines.extend([
+                    f"Scores kingdom matches request: {scores.get('kingdom') == kid}",
+                    f"Scores opponent matches matchup: "
+                    f"{isinstance(opponent, dict) and scores.get('opponent') == opponent.get('kid')}",
+                    f"Scores season matches matchup: {scores.get('season') == matchup.get('season')}",
+                    f"Scores stage matches matchup: {scores.get('stage') == matchup.get('stage')}",
+                ])
+            try:
+                kvk_embed(kid, matchup, scores)
+            except APIError as error:
+                lines.append(f"KvK renderer error code: {error.code}")
+            else:
+                lines.append("KvK renderer: accepted " + ("matchup and scores" if scores else "matchup only"))
+        await self._send_pages(ctx, "KvK safe diagnostics", lines)
+
     @ks.command(name="matchups")
     async def matchups(self, ctx):
         """Available current-season matchup records."""
@@ -720,7 +780,11 @@ class Kingshot(commands.Cog):
         if not matches:
             raise APIError(200, "schema")
         lines = []
+        seen = []
         for match in matches:
+            if match in seen:
+                continue
+            seen.append(match)
             ours, theirs = match.get("kingdom"), match.get("opponent")
             ours = ours.get("kid") if isinstance(ours, dict) else ours
             theirs = theirs.get("kid") if isinstance(theirs, dict) else theirs

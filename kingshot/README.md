@@ -192,6 +192,11 @@ ten. Missing/null scores are displayed as `—` with no invented rank, after sco
 entries; the card explicitly notes incomplete score coverage. Missing tags/names
 are `—`. The documented player leaderboard fields do **not** guarantee alliance
 tags; tags are displayed only when returned as `abbr` or `alliance.abbr`.
+If a particular player row omits its tag, scout reuses tags already returned on
+other boards in the same kingdom: an unambiguous player UID match, or a returned
+alliance `aid` matched to a known alliance tag. Explicitly absent membership and
+conflicting tags are not overridden. No name matching or extra profile requests
+are used; a tag unavailable anywhere in those responses still displays `[—]`.
 
 Long names and ranking lines are preserved. If either column exceeds Discord's
 1,024-character field limit, the category continues in additional numbered embeds,
@@ -217,6 +222,9 @@ UID or alliance ID **before** enforcing the 100-unique-entry limit. This handles
 responses exposing the same leaderboard more than once without counting players
 twice. Repeated IDs with conflicting record contents remain schema failures;
 no arbitrary record or higher score is selected.
+`ks ranks` now uses the same duplicate-safe sorted parser, including
+`alliance_kills` with alliance IDs. `ks matchups` also suppresses identical repeated
+matchup records found in multiple containers.
 Unrecognised/empty envelopes, missing identifiers, conflicting duplicate IDs, invalid numeric
 scores and fractional Mystic Trial stages remain explicit schema failures rather
 than silently dropping records or fabricating a leaderboard.
@@ -226,7 +234,7 @@ If a card reports an unexpected response format, the owner can run
 This existing owner-only diagnostic now displays the **HTTP status and API code**
 (such as `429 / rate_limit`), or `200 / ok` followed by **Parser error code: schema**
 when our parser rejects an otherwise successful response. It also displays record
-counts, identifier/score type counts, duplicate-ID and invalid-score counts,
+counts, identifier/score/tag/membership type counts, duplicate-ID and invalid-score counts,
 identical repeated-record and conflicting repeated-record counts,
 missing/null score coverage, non-integer Mystic Trial counts and the expected
 parser contract. It never sends raw API bodies, player names/IDs, score values or
@@ -234,6 +242,22 @@ credentials. It uses the normal cached ranks request. For the Town Center error,
 run `[p]ks boardtest 570 town_center` and `[p]ks boardtest 463 town_center`.
 A screenshot of "unexpected response format" alone does not establish whether the
 upstream response is malformed or the parser needs adapting to an actual API shape.
+
+### Diagnosing preparation score errors
+
+For a schema error from `ks score`, `ks kvkdays`, `ks kvk` or the dashboard, run
+`[p]ks kvktest 463` (substitute the kingdom). This owner-only command reuses the
+existing cached matchup and scores endpoints. It reports HTTP/API codes, expected
+field types, day-record counts/types, kingdom/opponent/season/stage consistency
+checks, and whether the shared KvK renderer accepts the responses. It does not
+send response values, identifiers from the responses, score totals or credentials.
+Authentication/subscription/rate-limit/network/server failures stop further requests.
+
+Score and matchup responses use a different contract from leaderboards. The message
+"unexpected response format" alone does not prove a duplicate leaderboard issue;
+keep mismatched identities, seasons and stages as errors until the diagnostic
+establishes the actual failing contract. Score-related command errors now point to
+this diagnostic. It does not weaken validation or fabricate unpublished scores.
 
 ### Comparing players and rankings
 
@@ -447,7 +471,7 @@ python -m pytest tests/test_kingshot.py -q
 python -m compileall -q kingshot
 ```
 
-Offline validation on 2026-11-01: **270 Kingshot tests passed** using Python 3.11,
+Offline validation on 2026-11-01: **279 Kingshot tests passed** using Python 3.11,
 Red 3.5.24 and discord.py. Real Red cog injection,
 unload/reload and temporary on-disk JSON Config persistence passed without login.
 Cross-kingdom command parsing, explicit API targets, invalid arguments and
@@ -462,6 +486,9 @@ board rosters, correct ordering/top-10 selection, top-player summaries, exact re
 targets/budget, real command parsing, partial scores, missing boards, fatal API errors
 and embed limits. Owner diagnostics distinguish HTTP/API failures from parser
 rejections without exposing response values.
+Additional tests cover shared duplicate handling in ranks/matchups, cross-board
+alliance-tag reuse without extra requests, ambiguous/absent membership, KvK field
+diagnostics and identity/season mismatch reporting.
 Syntax compilation and `git diff --check` also passed. Two pytest deprecation
 warnings originate in Red's `aiohttp-json-rpc` dependency, not this cog.
 

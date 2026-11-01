@@ -34,6 +34,12 @@ class APIError(Exception):
             "forbidden": "Access denied. Events and KvK require an active Mighty subscription.",
             "missing": "No record found, or preparation scores have not been published.",
             "scores_unavailable": "Preparation scores have not been published yet.",
+            "scores_mismatch": (
+                "MightPulse's matchup and preparation-score records disagree on kingdom, "
+                "opponent, season or stage. No scores were displayed to avoid mixing matchups. "
+                "The records may be stale or inconsistent. Try again after the five-minute "
+                "cache expires; if this persists, ask the MightPulse provider to check both records."
+            ),
             "rate_limit": "MightPulse rate limit reached. Try again after the allowance resets.",
             "invalid": "MightPulse rejected the requested identifier or parameters.",
             "server": "MightPulse is temporarily unavailable. Try again later.",

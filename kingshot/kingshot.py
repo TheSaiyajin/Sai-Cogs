@@ -93,7 +93,7 @@ class Kingshot(commands.Cog):
         if isinstance(original, (APIError, ValueError)):
             message = str(original)
             command = getattr(ctx, "command", None)
-            if (isinstance(original, APIError) and original.code == "schema"
+            if (isinstance(original, APIError) and original.code in ("schema", "scores_mismatch")
                     and getattr(command, "name", None) in ("score", "kvkdays", "kvk")):
                 message += "\nOwner diagnostic: ks kvktest <kingdom_id>"
             await ctx.send(message, allowed_mentions=discord.AllowedMentions.none())

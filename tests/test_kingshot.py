@@ -15,7 +15,10 @@ from kingshot import setup
 from kingshot import api as api_module
 from kingshot.api import APIError, BOARDS, MightyAPI, alliance_tag, identifier, retry_delay
 from kingshot.kingshot import GUILD_DEFAULTS, MEMBER_DEFAULTS, PLAYER_STATS, Kingshot
-from kingshot.views import calendar, comparison_pages, kvk_embed, number, pages, records, roster
+from kingshot.views import (
+    calendar, comparison_pages, kvk_embed, number, pages, records, roster,
+    SCOUT_BOARDS, scout_embeds, scout_rows,
+)
 
 
 PLAYER = {
@@ -495,6 +498,126 @@ def test_compare_missing_rank_sections():
     assert len(output) == 2 and len(output[0].fields) == len(PLAYER_STATS)
     assert "Unavailable" in output[1].description
     assert "own kingdom" in output[1].description
+
+
+def scout_fixture_rows(board, count=100):
+    if board == "alliance_power":
+        return [{"aid": i + 1, "abbr": f"A{i}", "name": f"Alliance {i}", "score": i + 1}
+                for i in range(count)]
+    return [{"uid": i + 1, "governor_id": i + 1000, "nick_name": f"Governor {i}", "score": i + 1}
+            for i in range(count)]
+
+
+def test_scout_command_targets_and_request_budget(cog_context, monkeypatch):
+    cog, ctx, config, _, _ = cog_context
+    before = deepcopy(config.guilds)
+    cog.api.kingdom = AsyncMock(side_effect=lambda kid: {
+        "ok": True, "kingdom": {"kid": kid, "power": kid * 1000, "pet_power": 100,
+                               "mystic_trial": 3000, "power_gain_7d": 50, "health": "F"}})
+    cog.api.ranks = AsyncMock(side_effect=lambda kid, board: {
+        "ok": True, "entries": scout_fixture_rows(board)})
+    mock_menu = AsyncMock()
+    monkeypatch.setattr("kingshot.kingshot.menu", mock_menu)
+    invoke(cog, ctx, "scout", 2312, 2316)
+    output = mock_menu.call_args.args[1]
+    assert len(output) == 5
+    assert "2312" in output[0].title and "2316" in output[0].title
+    assert any(field.name == "Pet power" for field in output[0].fields)
+    assert any(field.name.startswith("Mystic Trial total") for field in output[0].fields)
+    assert any("5,050" in field.value for field in output[0].fields if "Top-100" in field.name)
+    assert any("955" in field.value for field in output[0].fields if "Top-10" in field.name)
+    assert "Alliance 99" in output[1].fields[0].value
+    assert "Governor 99" in output[2].fields[0].value
+    assert "TC 100" in output[3].fields[0].value
+    assert "Stage 100" in output[4].fields[0].value
+    assert cog.api.kingdom.await_count == 2 and cog.api.ranks.await_count == 8
+    assert config.guilds == before
+    assert all(len(item) <= 6000 for item in output)
+    assert all(len(field.value) <= 1024 for item in output for field in item.fields)
+    assert not any("Active 7d" in field.name for item in output for field in item.fields)
+
+
+def test_scout_missing_board_is_visible_without_fabricated_totals(cog_context, monkeypatch):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.kingdom = AsyncMock(side_effect=lambda kid: {"ok": True, "kingdom": {"kid": kid}})
+
+    async def ranks(kid, board):
+        if kid == 571 and board == "mystic_trial":
+            raise APIError(404, "missing")
+        return {"ok": True, "rows": scout_fixture_rows(board, count=5)}
+    cog.api.ranks = AsyncMock(side_effect=ranks)
+    mock_menu = AsyncMock()
+    monkeypatch.setattr("kingshot.kingshot.menu", mock_menu)
+    invoke(cog, ctx, "scout", 570, 571)
+    output = mock_menu.call_args.args[1]
+    assert "No record found" in output[4].fields[1].value
+    assert all("Unavailable" in f.value for f in output[0].fields if f.name.startswith("Top-"))
+    assert "Unavailable" in output[0].fields[0].value
+
+
+@pytest.mark.parametrize("status,code", [(401, "auth"), (403, "forbidden"),
+                                        (429, "rate_limit"), (503, "server")])
+def test_scout_fatal_api_error_does_not_look_successful(cog_context, monkeypatch, status, code):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.kingdom = AsyncMock(side_effect=lambda kid: {"ok": True, "kingdom": {"kid": kid}})
+    cog.api.ranks = AsyncMock(side_effect=APIError(status, code))
+    mock_menu = AsyncMock()
+    monkeypatch.setattr("kingshot.kingshot.menu", mock_menu)
+    with pytest.raises(APIError):
+        invoke(cog, ctx, "scout", 570, 571)
+    assert not mock_menu.called
+
+
+@pytest.mark.parametrize("kids", [(0, 571), (570, 0), (570, 570)])
+def test_scout_invalid_ids_make_no_requests(cog_context, kids):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.kingdom = AsyncMock()
+    with pytest.raises(ValueError):
+        invoke(cog, ctx, "scout", *kids)
+    assert not cog.api.kingdom.called
+
+
+def test_scout_rejects_wrong_kingdom_response(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.kingdom = AsyncMock(return_value={"ok": True, "kingdom": {"kid": 999}})
+    with pytest.raises(APIError):
+        invoke(cog, ctx, "scout", 570, 571)
+
+
+def test_scout_real_red_argument_parsing_and_alias(cog_context, monkeypatch):
+    from discord.ext.commands.view import StringView
+    from redbot.core import commands
+
+    cog, _, _, _, _ = cog_context
+    cmd = Kingshot.scout
+    monkeypatch.setattr(cmd, "cog", cog)
+    message = MagicMock()
+    message.attachments = []
+    parsed = commands.Context(message=message, bot=cog.bot,
+                              view=StringView("2312 2316"), command=cmd)
+    run(cmd._parse_arguments(parsed))
+    assert parsed.args[2:] == [2312, 2316]
+    assert Kingshot.ks.get_command("comparekingdoms") is cmd
+
+
+@pytest.mark.parametrize("rows", [[], [{"uid": 1, "score": None}], [{"uid": 1, "score": -1}],
+                                  [{"uid": 1, "score": float("nan")}],
+                                  [{"uid": 1, "score": 1}, {"uid": 1, "score": 2}]])
+def test_scout_rejects_invalid_rank_samples(rows):
+    with pytest.raises(APIError):
+        scout_rows({"ok": True, "rows": rows}, "personal_power")
+
+
+def test_scout_long_names_all_ten_rows_fit_and_higher_labels():
+    boards = {board: scout_rows({"rows": scout_fixture_rows(board)}, board)
+              for board, _, _ in SCOUT_BOARDS}
+    for values in boards.values():
+        for row in values:
+            row.update(nick_name="@everyone " * 20, name="Long name " * 20)
+    output = scout_embeds((570, 571), [{"power": 100}, {"power": 50}], [boards, boards], [{}, {}])
+    assert "Left higher" in output[0].fields[0].value
+    for card in output[1:]:
+        assert all("10. " in field.value and len(field.value) <= 1024 for field in card.fields)
 
 
 def test_compare_large_ranking_list_is_paginated_without_lost_records():
@@ -1347,7 +1470,7 @@ def test_real_red_command_registration():
     command = Kingshot.ks
     expected = {"player", "heroes", "gear", "compare", "ranks", "alliance", "members", "top",
                 "inactive", "progress", "changes", "kingdom", "kvk", "score", "kvkdays",
-                "matchups", "events", "usage", "auto", "remind", "linkset"}
+                "matchups", "events", "usage", "auto", "remind", "linkset", "scout", "comparekingdoms"}
     assert set(command.all_commands) == expected
     from redbot.core.commands.requires import PrivilegeLevel
     assert Kingshot.ksset.requires.privilege_level == PrivilegeLevel.BOT_OWNER

@@ -17,8 +17,8 @@ declared for Downloader; Red already uses it. Install from the main branch:
 ```
 
 If `sai-cogs` is already added, use that repository name and its configured branch.
-For the expanded comparison update before merge, append
-`feature/kingshot-compare-rankings` to `repo add` when adding a new repository.
+For the kingdom scouting update before merge, append
+`feature/kingshot-kingdom-scout` to `repo add` when adding a new repository.
 `[p]` means your bot's command prefix, not literal text.
 
 ### Secure configuration (bot owner)
@@ -146,6 +146,7 @@ Links are per Discord server and have no automatic activity or ownership checks.
 | `[p]ks heroes <governor_id>` | Recorded **arena defence team**, levels, stars, power, equipped upgrades/mastery and widget |
 | `[p]ks gear <governor_id>` | Governor gear, quality, tier, stars, strength upgrades, score and combat; hidden gear is identified |
 | `[p]ks compare <player1> <player2>` | Profile statistics plus all available player ranking values and kingdom positions, including personal power, kills, Mystic Trial stage and returned pet/hero/other boards; paginated with independent data ages |
+| `[p]ks scout <kingdom1> <kingdom2>` | Kingdom metric comparison and top alliances, power players, TC levels and Mystic Trial stages; alias `comparekingdoms` |
 | `[p]ks ranks [board] [kingdom_id]` | Up to 100 leaderboard entries, paginated; default `personal_power` |
 | `[p]ks alliance [kingdom_id tag]` | Alliance overview; omit both arguments for configured alliance |
 | `[p]ks members [kingdom_id tag]` | Paginated roster, IDs, alliance ranks, power and TC |
@@ -160,6 +161,51 @@ Links are per Discord server and have no automatic activity or ownership checks.
 | `[p]ks matchups` | Available current-season matchup records |
 | `[p]ks events [kingdom_id]` | Kingdom calendar with start/end Discord timestamps |
 | `[p]ks usage` | **Bot owner only:** Mighty status and minute/day allowance |
+
+### Comparing kingdoms (KvK scouting)
+
+```text
+[p]ks scout 2312 2316
+[p]ks comparekingdoms 2312 2316
+```
+
+The command shows five navigable cards, similar to a scouting report:
+
+1. Kingdom totals: power, hero/troop/pet/building/research/gear/charm power,
+   kills, Mystic Trial aggregate, island prosperity, migrant score, published
+   7-day power gain and on-map player count. Each metric shows both kingdoms and
+   whether the left or right numeric value is higher (or tied).
+2. Ten strongest alliances from each kingdom's `alliance_power` leaderboard.
+3. Top ten players by `personal_power`.
+4. Top ten Town Center levels from `town_center`.
+5. Top ten individual Mystic Trial stages from `mystic_trial`.
+
+The kingdom summary also includes top-10/top-100 player power sums, **only** when
+the power board supplies at least 10/100 unique entries with valid numeric scores.
+Short/partial boards do not produce fabricated full top-list totals. Kingdom
+`mystic_trial` is labelled as a total, never an individual's stage; the player
+Mystic leaderboard is shown separately.
+
+The API health label is presented as an upstream label, not proof of recent
+activity. Stale player activity / derived active-7d and active-30d counts from the
+example screenshot are intentionally not presented as verified activity. A growth
+percentage is not invented when a verified historical denominator is unavailable.
+These are numeric comparisons, **not** a prediction of a KvK winner, preparation
+scores or castle battle results.
+
+Two distinct positive kingdom IDs are required. There are up to **10 counted
+requests on a cold cache** (two kingdom summaries and four boards per kingdom),
+using the shared one-hour cache and existing rate limiter. No individual player
+or alliance profile requests are made for the top lists. All users who can use
+statistics may scout; linking is not required. Saved settings and automation
+remain unchanged.
+
+Missing/malformed individual boards are explicitly labelled on the relevant
+card. Authentication, subscription, rate-limit and server/network failures
+abort the report with the normal error message rather than masquerading as
+successful empty data. Leaderboard envelope parsing uses the documented entry
+fields, as with `ks ranks`; live authenticated structures remain owner-verifiable.
+Top-list samples can be independently cached and are not necessarily simultaneous.
 
 ### Comparing players and rankings
 
@@ -363,7 +409,7 @@ python -m pytest tests/test_kingshot.py -q
 python -m compileall -q kingshot
 ```
 
-Offline validation on 2026-11-01: **206 Kingshot tests / 222 full repository tests
+Offline validation on 2026-11-01: **223 Kingshot tests / 239 full repository tests
 passed**, with Python 3.11, Red 3.5.24 and discord.py 2.7.1. Real Red cog injection,
 unload/reload and temporary on-disk JSON Config persistence passed without login.
 Cross-kingdom command parsing, explicit API targets, invalid arguments and
@@ -373,6 +419,8 @@ unverified role restrictions, guild-local duplicate claims, cleanup, retry marke
 member Config persistence, data deletion and real top-level command registration.
 Ranking comparison tests cover asymmetric/reordered boards, missing values,
 malformed responses, long-list pagination and the existing two-request budget.
+Kingdom scout tests cover exact request targets/budget, real command parsing,
+top-list sums and minimum counts, missing boards, fatal API errors and embed limits.
 Syntax compilation and `git diff --check` also passed. Two pytest deprecation
 warnings originate in Red's `aiohttp-json-rpc` dependency, not this cog.
 
@@ -387,6 +435,8 @@ The bot owner must perform live acceptance after installation:
 6. Wait for two distinct hourly snapshots, then verify progress and membership changes.
 7. Configure non-privileged linking roles, run `link` / `sync` / `unlink` with a test
    member below the bot, and verify nickname, role assignment and restoration.
+8. Run `ks scout <kingdom1> <kingdom2>` and check all five cards against actual
+   kingdom/board data, particularly Mystic Trial totals versus individual stages.
 
 No real Discord login or authenticated MightPulse requests are made in automated
 tests. Installation in your running bot and live subscription behavior cannot be

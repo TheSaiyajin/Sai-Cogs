@@ -176,6 +176,88 @@ def comparison_pages(first: dict, second: dict, stats) -> list:
     return output
 
 
+SCOUT_BOARDS = (
+    ("alliance_power", "Strongest alliances", "Power"),
+    ("personal_power", "Top 10 players", "Power"),
+    ("town_center", "Top Town Center levels", "TC"),
+    ("mystic_trial", "Top Mystic Trial", "Stage"),
+)
+
+
+def scout_rows(data: dict, board: str) -> list:
+    required = {"aid", "score"} if board == "alliance_power" else {"uid", "score"}
+    rows = records(data, required)
+    if not rows or len(rows) > 100:
+        raise APIError(200, "schema")
+    identity = "aid" if board == "alliance_power" else "uid"
+    ids = set()
+    for row in rows:
+        uid = row[identity]
+        if (not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0 or uid in ids
+                or number(row["score"]) == "Unavailable" or row["score"] < 0):
+            raise APIError(200, "schema")
+        ids.add(uid)
+    return sorted(rows, key=lambda row: row["score"], reverse=True)
+
+
+def scout_embeds(kids: tuple, kingdoms: list, boards: list, errors: list) -> list:
+    summary = embed(f"Kingdom scout: K{kids[0]} vs K{kids[1]}",
+                    description="Kingdom statistics, not preparation scores or castle battle results.\n"
+                    "Higher numeric value: left / right / tied; not a prediction of a KvK winner.")
+    metrics = [
+        ("Total power", "power"), ("Hero power", "hero_power"), ("Troop power", "troop_power"),
+        ("Pet power", "pet_power"), ("Building power", "building_power"),
+        ("Research power", "research_power"), ("Governor gear power", "governor_gear_power"),
+        ("Governor charm power", "governor_charm_power"), ("Kills", "kills"),
+        ("Mystic Trial total (not an individual stage)", "mystic_trial"),
+        ("Island prosperity", "island_prosperity"), ("Migrant score", "migrant_score"),
+        ("Power gain, 7 days", "power_gain_7d"),
+        ("Players on map (not recent activity)", "located"),
+    ]
+    for label, key in metrics:
+        values = [kingdom.get(key) for kingdom in kingdoms]
+        formatted = [number(value) for value in values]
+        standing = "Unavailable"
+        if "Unavailable" not in formatted:
+            standing = "Left higher" if values[0] > values[1] else (
+                "Right higher" if values[0] < values[1] else "Tied")
+        summary.add_field(name=label, value=f"K{kids[0]}: {formatted[0]}\n"
+                          f"K{kids[1]}: {formatted[1]}\n{standing}", inline=True)
+    for count in (10, 100):
+        values = []
+        for indexed in boards:
+            rows = indexed.get("personal_power", [])
+            values.append(number(sum(row["score"] for row in rows[:count]))
+                          if len(rows) >= count else f"Unavailable (need {count} ranked players)")
+        summary.add_field(name=f"Top-{count} player power sum",
+                          value=f"K{kids[0]}: {values[0]}\nK{kids[1]}: {values[1]}", inline=False)
+    summary.add_field(name="API health label (not a verified activity assessment)",
+                      value=f"K{kids[0]}: {text(kingdoms[0].get('health'))}\n"
+                      f"K{kids[1]}: {text(kingdoms[1].get('health'))}", inline=False)
+    output = [summary]
+    for board, title, label in SCOUT_BOARDS:
+        result = embed(title)
+        for index, kid in enumerate(kids):
+            rows = boards[index].get(board)
+            if rows is None:
+                value = errors[index].get(board, "Leaderboard unavailable.")
+            else:
+                lines = []
+                for rank, row in enumerate(rows[:10], 1):
+                    if board == "alliance_power":
+                        name = f"[{text(row.get('abbr'), 20)}] {text(row.get('name'), 35)}"
+                    else:
+                        name = text(row.get("nick_name"), 50)
+                    lines.append(f"{rank}. {name} - {label} {number(row['score'])}"[:95])
+                value = "\n".join(lines)
+            result.add_field(name=f"K{kid}", value=value[:1024], inline=True)
+        output.append(result)
+    for result in output:
+        result.set_footer(text="MightPulse | Cached data up to 1 hour old; independent requests | "
+                          "Top lists sampled from up to 100 entries per kingdom and board")
+    return output
+
+
 def kvk_embed(kid: int, matchup: dict, scores: dict = None, unavailable: str = None,
               updated: float = None) -> discord.Embed:
     kingdom = mapping(matchup, "kingdom")

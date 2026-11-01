@@ -337,6 +337,38 @@ def test_missing_bye_and_mismatched_scores():
     assert number(None) == "Unavailable" and number(1234567) == "1,234,567"
 
 
+@pytest.mark.parametrize("change", [
+    {"kingdom": 463}, {"opponent": 999}, {"season": 21}, {"stage": "different"},
+    {"opponent": 999, "season": 21, "stage": "different"},
+])
+def test_valid_but_inconsistent_score_records_have_specific_error(change):
+    with pytest.raises(APIError) as error:
+        kvk_embed(570, MATCHUP, dict(SCORES, **change))
+    assert error.value.code == "scores_mismatch"
+    assert "No scores were displayed" in str(error.value)
+    assert "999" not in str(error.value) and "different" not in str(error.value)
+
+
+@pytest.mark.parametrize("change", [
+    {"kingdom": None}, {"opponent": "999"}, {"season": None}, {"stage": None},
+])
+def test_malformed_scores_still_report_schema_errors(change):
+    with pytest.raises(APIError) as error:
+        kvk_embed(570, MATCHUP, dict(SCORES, **change))
+    assert error.value.code == "schema"
+
+
+@pytest.mark.parametrize("command", ["score", "kvkdays"])
+def test_inconsistent_score_commands_never_send_successful_embeds(cog_context, command):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.scores.return_value = dict(SCORES, opponent=999, season=21, stage="different")
+    with pytest.raises(APIError) as error:
+        invoke(cog, ctx, command, 570)
+    assert error.value.code == "scores_mismatch"
+    assert not ctx.send.called
+    assert cog.api.kvk.await_count == 1 and cog.api.scores.await_count == 1
+
+
 def test_embed_pagination_limits():
     output = pages("Title", ["@everyone " + "x" * 900] * 100)
     assert len(output) > 1

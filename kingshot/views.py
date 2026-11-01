@@ -393,10 +393,17 @@ def kvk_embed(kid: int, matchup: dict, scores: dict = None, unavailable: str = N
     elif scores is None:
         result.add_field(name="Preparation scores", value=unavailable or "Not requested.", inline=False)
     else:
+        for data in (matchup, scores):
+            if (not isinstance(data.get("season"), int) or isinstance(data["season"], bool)
+                    or not isinstance(data.get("stage"), str)):
+                raise APIError(200, "schema")
+        for key in ("kingdom", "opponent"):
+            if not isinstance(scores.get(key), int) or isinstance(scores[key], bool):
+                raise APIError(200, "schema")
         if (scores.get("kingdom") != kid or scores.get("opponent") != opponent_id
                 or scores.get("season") != matchup.get("season")
                 or scores.get("stage") != matchup.get("stage")):
-            raise APIError(200, "schema")
+            raise APIError(200, "scores_mismatch")
         ours, theirs = scores.get("score"), scores.get("opponent_score")
         result.add_field(name=f"K{kid} preparation", value=number(ours))
         result.add_field(name=f"K{opponent_id} preparation", value=number(theirs))

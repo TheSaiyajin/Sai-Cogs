@@ -258,6 +258,12 @@ Score and matchup responses use a different contract from leaderboards. The mess
 keep mismatched identities, seasons and stages as errors until the diagnostic
 establishes the actual failing contract. Score-related command errors now point to
 this diagnostic. It does not weaken validation or fabricate unpublished scores.
+When structurally valid responses disagree on kingdom, opponent, season or stage,
+the shared score/day/dashboard renderer now reports `scores_mismatch`, explicitly
+explaining that the records disagree and no scores were displayed. This is distinct
+from malformed field types (`schema`). Let the five-minute cache expire and retry;
+persisting disagreement requires the provider to reconcile its records. No extra
+refresh requests are issued and mismatched score data is never relabelled.
 
 ### Comparing players and rankings
 
@@ -471,7 +477,7 @@ python -m pytest tests/test_kingshot.py -q
 python -m compileall -q kingshot
 ```
 
-Offline validation on 2026-11-01: **279 Kingshot tests passed** using Python 3.11,
+Offline validation on 2026-11-01: **290 Kingshot tests passed** using Python 3.11,
 Red 3.5.24 and discord.py. Real Red cog injection,
 unload/reload and temporary on-disk JSON Config persistence passed without login.
 Cross-kingdom command parsing, explicit API targets, invalid arguments and

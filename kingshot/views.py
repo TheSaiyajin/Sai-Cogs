@@ -268,23 +268,30 @@ SCOUT_BOARDS = (
 def scout_rows(data: dict, board: str) -> list:
     identity = "aid" if board == "alliance_power" else "uid"
     rows = records(data, {identity})
-    if not rows or len(rows) > 100:
+    if not rows:
         raise APIError(200, "schema")
     if any(identity not in row for row in records(data, {"score"})):
         raise APIError(200, "schema")
-    ids = set()
+    indexed = {}
     for row in rows:
         uid = row[identity]
         score = row.get("score")
-        if not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0 or uid in ids:
+        if not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0:
             raise APIError(200, "schema")
         if score is not None and (
             number(score) == "Unavailable" or score < 0
             or (board == "mystic_trial" and score != int(score))
         ):
             raise APIError(200, "schema")
-        ids.add(uid)
-    return sorted(rows, key=lambda row: row["score"] if row.get("score") is not None else -1,
+        if uid in indexed:
+            if row != indexed[uid]:
+                raise APIError(200, "schema")
+        else:
+            indexed[uid] = row
+            if len(indexed) > 100:
+                raise APIError(200, "schema")
+    return sorted(indexed.values(),
+                  key=lambda row: row["score"] if row.get("score") is not None else -1,
                   reverse=True)
 
 

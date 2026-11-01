@@ -13,7 +13,7 @@ from redbot.core.utils.views import SetApiView
 from .api import APIError, MightyAPI, alliance_tag, identifier
 from .views import (
     calendar, comparison_pages, embed, fields, image, kvk_embed, mapping, number, pages,
-    records, roster, text, timestamp,
+    records, roster, SCOUT_BOARDS, scout_embeds, scout_rows, text, timestamp,
 )
 
 log = logging.getLogger("red.Sai.kingshot")
@@ -471,6 +471,27 @@ class Kingshot(commands.Cog):
         """Compare profiles and all available player ranking values and kingdom positions."""
         first, second = await asyncio.gather(self.api.player(player1), self.api.player(player2))
         await menu(ctx, comparison_pages(first, second, PLAYER_STATS), DEFAULT_CONTROLS)
+
+    @ks.command(name="scout", aliases=["comparekingdoms"], ignore_extra=False)
+    async def scout(self, ctx, kingdom1: int, kingdom2: int):
+        """Compare two kingdoms and their top alliances, power, TC and Mystic Trial players."""
+        kids = (identifier(kingdom1), identifier(kingdom2))
+        if kids[0] == kids[1]:
+            raise ValueError("Choose two different kingdom IDs.")
+        data = await asyncio.gather(*(self.api.kingdom(kid) for kid in kids))
+        kingdoms = [mapping(item, "kingdom") for item in data]
+        if any(kingdom.get("kid") != kid for kid, kingdom in zip(kids, kingdoms)):
+            raise APIError(200, "schema")
+        boards, errors = [{}, {}], [{}, {}]
+        for index, kid in enumerate(kids):
+            for board, _, _ in SCOUT_BOARDS:
+                try:
+                    boards[index][board] = scout_rows(await self.api.ranks(kid, board), board)
+                except APIError as error:
+                    if error.status not in (404, 200):
+                        raise
+                    errors[index][board] = str(error)
+        await menu(ctx, scout_embeds(kids, kingdoms, boards, errors), DEFAULT_CONTROLS)
 
     @ks.command(name="ranks", ignore_extra=False)
     async def ranks(self, ctx, board: str = "personal_power", kid: Optional[int] = None):

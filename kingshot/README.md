@@ -145,8 +145,8 @@ Links are per Discord server and have no automatic activity or ownership checks.
 | `[p]ks player <governor_id>` | Name, governor ID, power, Town Center, kills, VIP, alliance, kingdom, avatar |
 | `[p]ks heroes <governor_id>` | Recorded **arena defence team**, levels, stars, power, equipped upgrades/mastery and widget |
 | `[p]ks gear <governor_id>` | Governor gear, quality, tier, stars, strength upgrades, score and combat; hidden gear is identified |
-| `[p]ks compare <player1> <player2>` | Profile and ranking comparison in separate messages: total/personal power, hero power, Mystic Trial, master power, island prosperity and other returned boards; independent data ages |
-| `[p]ks scout <kingdom1> <kingdom2>` | Kingdom metric comparison and top alliances, power players, TC levels and Mystic Trial stages; alias `comparekingdoms` |
+| `[p]ks compare <player1> <player2>` | Two individual players, side by side: personal power, Mystic Trial stage, hero power, pet power and masters power |
+| `[p]ks scout <kingdom1> <kingdom2>` | Six independent top-10 boards and a five-stat Top Player summary, side by side; alias `comparekingdoms` |
 | `[p]ks ranks [board] [kingdom_id]` | Up to 100 leaderboard entries, paginated; default `personal_power` |
 | `[p]ks alliance [kingdom_id tag]` | Alliance overview; omit both arguments for configured alliance |
 | `[p]ks members [kingdom_id tag]` | Paginated roster, IDs, alliance ranks, power and TC |
@@ -169,38 +169,42 @@ Links are per Discord server and have no automatic activity or ownership checks.
 [p]ks comparekingdoms 2312 2316
 ```
 
-The command sends five **separate messages**, similar to a scouting report
-(no page/reaction menu):
+The command normally sends seven **separate embed messages** (no reaction menu),
+each with two inline fields headed `Kingdom #<ID>`:
 
-1. Kingdom totals: total power, personal power total (`gov_power`), hero power,
-   hero total, master power, troop/pet/building/research/gear/charm power,
-   kills, Mystic Trial aggregate, island prosperity, migrant score, published
-   7-day power gain and on-map player count. Each metric shows both kingdoms and
-   whether the left or right numeric value is higher (or tied).
-2. Ten strongest alliances from each kingdom's `alliance_power` leaderboard.
-3. Top ten players by `personal_power`.
-4. Top ten Town Center levels from `town_center`.
-5. Top ten individual Mystic Trial stages from `mystic_trial`.
+1. Top 10 players by personal power (`personal_power`).
+2. Top 10 alliances by total alliance power (`alliance_power`).
+3. Top 10 individual Mystic Trial stages (`mystic_trial`).
+4. Top 10 hero power (`hero_total`, not the single-hero leaderboard).
+5. Top 10 pet power (`pet_power`).
+6. Top 10 masters power (`master_power`).
+7. Kingdom Statistics: the **Top Player** value for each of the five player
+   statistics above, labelled as **not totals**. Each value comes from the first
+   available scored entry on its own sorted board, never from a kingdom aggregate.
+   Higher values and ties are labelled when both kingdoms have comparable data.
 
-The kingdom summary also includes top-10/top-100 player power sums, **only** when
-the power board supplies at least 10/100 unique entries with valid numeric scores.
-Short/partial boards do not produce fabricated full top-list totals. Kingdom
-`mystic_trial` is labelled as a total, never an individual's stage; the player
-Mystic leaderboard is shown separately.
+Every board is fetched and sorted independently, highest first. Hero, pet,
+masters and Mystic Trial rankings do not reuse the personal-power roster.
+Entries include names, returned alliance tags and the board's score. Power uses
+K/M/B formatting; Mystic Trial stages remain full integers, not abbreviated power
+or the kingdom's `mystic_trial` aggregate. Only available entries are shown up to
+ten. Missing/null scores are displayed as `—` with no invented rank, after scored
+entries; the card explicitly notes incomplete score coverage. Missing tags/names
+are `—`. The documented player leaderboard fields do **not** guarantee alliance
+tags; tags are displayed only when returned as `abbr` or `alliance.abbr`.
 
-The API health label is presented as an upstream label, not proof of recent
-activity. Stale player activity / derived active-7d and active-30d counts from the
-example screenshot are intentionally not presented as verified activity. A growth
-percentage is not invented when a verified historical denominator is unavailable.
-These are numeric comparisons, **not** a prediction of a KvK winner, preparation
-scores or castle battle results.
+Long names and ranking lines are preserved. If either column exceeds Discord's
+1,024-character field limit, the category continues in additional numbered embeds,
+each sent as a separate message with both kingdom headings. Normal output is seven
+messages; long data can produce more. No top-list sums, unrelated statistics,
+activity estimates, preparation scores or battle predictions are included.
 
-Two distinct positive kingdom IDs are required. There are up to **10 counted
-requests on a cold cache** (two kingdom summaries and four boards per kingdom),
-using the shared one-hour cache and existing rate limiter. No individual player
-or alliance profile requests are made for the top lists. All users who can use
-statistics may scout; linking is not required. Saved settings and automation
-remain unchanged.
+Two distinct positive kingdom IDs are required. There are **12 counted requests
+on a cold cache** (six boards per kingdom), using the existing shared one-hour
+cache and rate limiter. The summary reuses the boards: no additional kingdom,
+individual player or alliance profile requests are made. All users who can use
+statistics may scout; linking is not required. Saved settings and automation remain
+unchanged.
 
 Missing/malformed individual boards are explicitly labelled on the relevant
 card. Authentication, subscription, rate-limit and server/network failures
@@ -208,43 +212,53 @@ abort the report with the normal error message rather than masquerading as
 successful empty data. Leaderboard envelope parsing uses the documented entry
 fields, as with `ks ranks`; live authenticated structures remain owner-verifiable.
 Top-list samples can be independently cached and are not necessarily simultaneous.
+Unrecognised/empty envelopes, missing identifiers, duplicate IDs, invalid numeric
+scores and fractional Mystic Trial stages remain explicit schema failures rather
+than silently dropping records or fabricating a leaderboard.
 
 If a card reports an unexpected response format, the owner can run
 `[p]ks boardtest 570 mystic_trial` (substitute kingdom/board) and share its output.
-This owner-only diagnostic displays record counts, identifier/score type counts,
-duplicate-ID and invalid-score counts, and parser acceptance. It never sends raw
-API bodies, player names/IDs, score values or credentials. It uses the normal
-cached ranks request. A screenshot alone cannot distinguish missing identifiers,
-string/null scores, duplicate records, or an undocumented API envelope; keep the
-data unavailable until the actual authenticated shape is diagnosed.
+This existing owner-only diagnostic now displays the **HTTP status and API code**
+(such as `429 / rate_limit`), or `200 / ok` followed by **Parser error code: schema**
+when our parser rejects an otherwise successful response. It also displays record
+counts, identifier/score type counts, duplicate-ID and invalid-score counts,
+missing/null score coverage, non-integer Mystic Trial counts and the expected
+parser contract. It never sends raw API bodies, player names/IDs, score values or
+credentials. It uses the normal cached ranks request. For the Town Center error,
+run `[p]ks boardtest 570 town_center` and `[p]ks boardtest 463 town_center`.
+A screenshot of "unexpected response format" alone does not establish whether the
+upstream response is malformed or the parser needs adapting to an actual API shape.
 
 ### Comparing players and rankings
 
-`[p]ks compare <player1> <player2>` accepts two in-game governor IDs and sends
-each comparison card as a **separate message**, not a pagination menu. The first
-card retains total profile power, TC, kills, VIP and kingdom. Further cards compare documented
-`ranks` values and positions for personal power, kills, Town Center, migrant
-score and Mystic Trial stage, plus **every named entry returned in each player's
-`ranks.leaderboards`** (for example pet power, hero power or island prosperity).
-Hero power, hero total, master power and island prosperity categories are always
-shown, labelled `Unavailable` when omitted by the API. Personal power and Mystic
-Trial use the documented fixed `ranks` fields; other values come only from named
-leaderboard entries. Player total power is the profile's `power`, not an invented
-sum of components. Kingdom personal power total uses `gov_power` and is displayed
-separately from overall kingdom `power`.
+`[p]ks compare <player1> <player2>` requires exactly two distinct positive in-game
+governor IDs, not kingdoms or Discord IDs. One compact embed normally shows the
+players side by side, including names, available alliance tags, governor IDs and
+kingdom IDs. Only these five statistics appear:
 
-Boards are matched by their API-provided name, not their list position. A board
-present for only one player still appears, with the other value shown as
-`Unavailable`. Missing ranks are never zero. Only returned player data is compared;
-the cog does not fetch every kingdom leaderboard or invent missing pet/stage data.
-The API may not return every board listed under `ks ranks` for a particular player.
+- **Personal Power:** `ranks.power`, falling back to the returned `player.power`
+  when the ranking value is missing; no component sum is invented.
+- **Mystic Trial Stage:** `ranks.mystic_trial`, or the named `Mystic Trial`
+  leaderboard value when the fixed field is missing. Integer stages are shown
+  in full, never a kingdom aggregate.
+- **Hero Power:** the named `Hero Total` entry, with `Hero Power` as the alternate
+  API label. The arena defence hero list and single-hero power are not summed or
+  substituted for total hero power.
+- **Pet Power:** the named `Pet Power` entry.
+- **Masters Power:** the named `Master Power` or `Masters Power` entry.
 
-Values are shown as left player / right player with their governor IDs and
-kingdoms labelled. Rank positions belong to each player's **own kingdom**, not
-global standings, so positions across different kingdoms are not directly
-equivalent. All pages show the independent data ages; the records may not be
-simultaneous. Comparisons use the existing cached player requests, with no extra
-paid leaderboard requests.
+Named boards are matched case-insensitively, allowing underscores and whitespace,
+not by list position. Missing values are `—`, not zero; malformed ranking containers
+produce an explicit schema error. K/M/B formatting is used for power values.
+The higher value in each comparable pair is labelled `(Higher)`; equal values are
+`(Tied)`. A missing value is not considered a losing score.
+
+All output uses the existing two cached player requests, with no additional
+leaderboard requests. The API can omit hero, pet, masters or stage values for a
+player; those statistics remain unavailable rather than being inferred. Long
+identity text continues in numbered embeds/messages without silent truncation.
+Footers retain independent data ages and refresh-timeout notices. No kills,
+Town Center, VIP, kingdom positions, island prosperity or unrelated boards appear.
 
 ### Look up other kingdoms without changing settings
 
@@ -427,18 +441,21 @@ python -m pytest tests/test_kingshot.py -q
 python -m compileall -q kingshot
 ```
 
-Offline validation on 2026-11-01: **228 Kingshot tests / 244 full repository tests
-passed**, with Python 3.11, Red 3.5.24 and discord.py 2.7.1. Real Red cog injection,
+Offline validation on 2026-11-01: **257 Kingshot tests passed** using Python 3.11,
+Red 3.5.24 and discord.py. Real Red cog injection,
 unload/reload and temporary on-disk JSON Config persistence passed without login.
 Cross-kingdom command parsing, explicit API targets, invalid arguments and
 unchanged per-guild settings are covered.
 Linking tests cover nickname/role updates, permission/hierarchy failures,
 unverified role restrictions, guild-local duplicate claims, cleanup, retry markers,
 member Config persistence, data deletion and real top-level command registration.
-Ranking comparison tests cover asymmetric/reordered boards, missing values,
-malformed responses, long-list pagination and the existing two-request budget.
-Kingdom scout tests cover exact request targets/budget, real command parsing,
-top-list sums and minimum counts, missing boards, fatal API errors and embed limits.
+Ranking comparison tests cover asymmetric/reordered boards, exactly five statistics,
+missing/zero values, true integer stages, malformed responses, full-name continuation
+and the existing two-request budget. Kingdom scout tests cover independent disjoint
+board rosters, correct ordering/top-10 selection, top-player summaries, exact request
+targets/budget, real command parsing, partial scores, missing boards, fatal API errors
+and embed limits. Owner diagnostics distinguish HTTP/API failures from parser
+rejections without exposing response values.
 Syntax compilation and `git diff --check` also passed. Two pytest deprecation
 warnings originate in Red's `aiohttp-json-rpc` dependency, not this cog.
 
@@ -453,9 +470,10 @@ The bot owner must perform live acceptance after installation:
 6. Wait for two distinct hourly snapshots, then verify progress and membership changes.
 7. Configure non-privileged linking roles, run `link` / `sync` / `unlink` with a test
    member below the bot, and verify nickname, role assignment and restoration.
-8. Run `ks scout <kingdom1> <kingdom2>` and check all five cards against actual
-   kingdom/board data, particularly Mystic Trial totals versus individual stages.
-   The report sends five separate messages. If a board fails, run `ks boardtest`
+8. Run `ks compare <player1> <player2>` and verify the five player statistics.
+   Run `ks scout <kingdom1> <kingdom2>` and check all seven categories against actual
+   board data, particularly individual Mystic Trial stages and total hero power.
+   The scout report sends at least seven separate messages. If a board fails, run `ks boardtest`
    to collect safe schema diagnostics before claiming that the live issue is fixed.
 
 No real Discord login or authenticated MightPulse requests are made in automated

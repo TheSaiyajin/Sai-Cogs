@@ -116,63 +116,135 @@ def pages(title: str, lines: list, *, data=None) -> list:
             for i, chunk in enumerate(chunks)]
 
 
-def comparison_pages(first: dict, second: dict, stats) -> list:
-    left, right = mapping(first, "player"), mapping(second, "player")
-    title = f"{text(left.get('nick_name'), 90)} vs {text(right.get('nick_name'), 90)}"
-    summary = embed(title)
-    for label, key, _ in stats:
-        if key == "power":
-            label = "Total power (player profile)"
-        summary.add_field(name=label, value=f"{number(left.get(key))} / {number(right.get(key))}",
-                          inline=False)
-    lines = [
-        f"Left: {text(left.get('nick_name'))} ({text(left.get('governor_id'))}), "
-        f"K{number(left.get('kid'))}",
-        f"Right: {text(right.get('nick_name'))} ({text(right.get('governor_id'))}), "
-        f"K{number(right.get('kid'))}",
-        "Ranks are within each player's own kingdom, not global standings.",
-    ]
-    rankings = []
-    for data in (first, second):
-        ranks = data.get("ranks")
-        if ranks is None:
-            ranks = {}
-        if not isinstance(ranks, dict):
+PLAYER_COMPARISON_STATS = (
+    ("personal_power", "Personal Power"),
+    ("mystic_trial", "Mystic Trial Stage"),
+    ("hero_total", "Hero Power"),
+    ("pet_power", "Pet Power"),
+    ("master_power", "Masters Power"),
+)
+MISSING = "\N{EM DASH}"
+
+
+def compact_number(value: Any, *, stage: bool = False) -> str:
+    if number(value) == "Unavailable" or value < 0:
+        return MISSING
+    if stage:
+        return str(int(value)) if value == int(value) else MISSING
+    for divisor, suffix in ((10**9, "B"), (10**6, "M"), (10**3, "K")):
+        if value >= divisor:
+            scaled = round(value / divisor, 2)
+            if scaled >= 1000 and suffix in ("K", "M"):
+                scaled /= 1000
+                suffix = "M" if suffix == "K" else "B"
+            return f"{scaled:.2f}".rstrip("0").rstrip(".") + suffix
+    return number(value)
+
+
+def comparison_text(value: Any) -> str:
+    if value is None or value == "":
+        return MISSING
+    return discord.utils.escape_markdown(discord.utils.escape_mentions(str(value)))
+
+
+def ranked_name(row: dict, *, alliance: bool = False) -> str:
+    membership = row.get("alliance")
+    tag = row.get("abbr")
+    if tag is None and isinstance(membership, dict):
+        tag = membership.get("abbr")
+    name = row.get("name") if alliance else row.get("nick_name")
+    return f"[{comparison_text(tag)}] {comparison_text(name)}"
+
+
+def side_by_side(title: str, headings: list, columns: list) -> list:
+    """Keep complete ranking lines, continuing both columns when a field fills."""
+    chunks = []
+    for lines in columns:
+        parts, current = [], ""
+        for line in lines:
+            if current and len(current) + len(line) + 1 > 1024:
+                parts.append(current)
+                current = ""
+            while len(line) > 1024:
+                parts.append(line[:1024])
+                line = line[1024:]
+            current += ("\n" if current else "") + line
+        if current:
+            parts.append(current)
+        chunks.append(parts or [MISSING])
+    count = max(len(column) for column in chunks)
+    output = []
+    for index in range(count):
+        result = embed(title + (f" ({index + 1}/{count})" if count > 1 else ""))
+        for heading, column in zip(headings, chunks):
+            result.add_field(name=heading, value=column[index] if index < len(column) else MISSING,
+                             inline=True)
+        output.append(result)
+    return output
+
+
+def player_comparison_values(data: dict) -> dict:
+    ranks = data.get("ranks")
+    if ranks is None:
+        ranks = {}
+    if not isinstance(ranks, dict):
+        raise APIError(200, "schema")
+    boards = ranks.get("leaderboards", [])
+    if not isinstance(boards, list):
+        raise APIError(200, "schema")
+    indexed = {}
+    for board in boards:
+        if not isinstance(board, dict) or not isinstance(board.get("name"), str):
             raise APIError(200, "schema")
-        boards = ranks.get("leaderboards", [])
-        if not isinstance(boards, list):
+        name = " ".join(board["name"].casefold().replace("_", " ").split())
+        if not name or name in indexed:
             raise APIError(200, "schema")
-        indexed = {}
-        for board in boards:
-            if (not isinstance(board, dict) or not isinstance(board.get("name"), str)
-                    or not board["name"].strip() or board["name"] in indexed):
-                raise APIError(200, "schema")
-            indexed[board["name"]] = board
-        rankings.append((ranks, indexed))
-    for label, value_key, rank_key in (
-        ("Personal power", "power", "power_rank"),
-        ("Kills", "kills", "kills_rank"),
-        ("Town Center", "town_center_level", "town_center_rank"),
-        ("Migrant score", "migrant_score", "migrant_rank"),
-        ("Mystic Trial stage", "mystic_trial", "mystic_rank"),
+        indexed[name] = board.get("value")
+    power = ranks.get("power")
+    if power is None:
+        power = mapping(data, "player").get("power")
+    trial = ranks.get("mystic_trial")
+    if trial is None:
+        trial = indexed.get("mystic trial")
+    values = {"personal_power": power, "mystic_trial": trial}
+    for slug, names in (
+        ("hero_total", ("hero total", "hero power")),
+        ("pet_power", ("pet power",)),
+        ("master_power", ("master power", "masters power")),
     ):
-        values = [f"{number(ranks.get(value_key))} (kingdom rank: {number(ranks.get(rank_key))})"
-                  for ranks, _ in rankings]
-        lines.append(f"**{label}**\nLeft: {values[0]}\nRight: {values[1]}")
-    names = dict.fromkeys(list(rankings[0][1]) + list(rankings[1][1]))
-    # Keep requested categories visible even when the API omits their leaderboard entries.
-    normalized_names = {name.casefold().replace("_", " ") for name in names}
-    for label in ("Hero Power", "Hero Total", "Master Power", "Island Prosperity"):
-        if label.casefold() not in normalized_names:
-            names[label] = None
-    for name in names:
-        values = []
-        for _, boards in rankings:
-            board = boards.get(name, {})
-            values.append(f"{number(board.get('value'))} "
-                          f"(kingdom rank: {number(board.get('kingdom_rank'))})")
-        lines.append(f"**{text(name)}**\nLeft: {values[0]}\nRight: {values[1]}")
-    output = [summary] + pages("Ranking comparison", lines)
+        values[slug] = next((indexed[name] for name in names if indexed.get(name) is not None), None)
+    return values
+
+
+def higher_label(values: list, index: int, *, stage: bool = False) -> str:
+    if any(compact_number(value, stage=stage) == MISSING for value in values):
+        return ""
+    if values[0] == values[1]:
+        return " (Tied)"
+    return " (Higher)" if values[index] > values[1 - index] else ""
+
+
+def comparison_pages(first: dict, second: dict) -> list:
+    players = [mapping(data, "player") for data in (first, second)]
+    for player in players:
+        kid = player.get("kid")
+        if kid is not None and (not isinstance(kid, int) or isinstance(kid, bool)
+                                or not 1 <= kid <= 2**63 - 1):
+            raise APIError(200, "schema")
+    values = [player_comparison_values(data) for data in (first, second)]
+    columns = []
+    for index, player in enumerate(players):
+        lines = [f"**{ranked_name(player)}**",
+                 f"Governor ID: {comparison_text(player.get('governor_id'))}"]
+        for slug, label in PLAYER_COMPARISON_STATS:
+            pair = [value.get(slug) for value in values]
+            stage = slug == "mystic_trial"
+            lines.append(f"**{label}:** {compact_number(pair[index], stage=stage)}"
+                         + higher_label(pair, index, stage=stage))
+        columns.append(lines)
+    headings = [f"Player {index + 1} | Kingdom #{comparison_text(player.get('kid'))}"
+                for index, player in enumerate(players)]
+    output = side_by_side("Player Comparison", headings, columns)
     freshness = (f"MightPulse | Ages (seconds), left / right: "
                  f"{number(first.get('age_seconds'))} / {number(second.get('age_seconds'))}; "
                  "not necessarily simultaneous")
@@ -184,83 +256,71 @@ def comparison_pages(first: dict, second: dict, stats) -> list:
 
 
 SCOUT_BOARDS = (
-    ("alliance_power", "Strongest alliances", "Power"),
-    ("personal_power", "Top 10 players", "Power"),
-    ("town_center", "Top Town Center levels", "TC"),
-    ("mystic_trial", "Top Mystic Trial", "Stage"),
+    ("personal_power", "Top 10 Players - Personal Power", "Power"),
+    ("alliance_power", "Top 10 Alliances - Alliance Power", "Power"),
+    ("mystic_trial", "Top 10 Mystic Trial Stages", "Stage"),
+    ("hero_total", "Top 10 Hero Power", "Power"),
+    ("pet_power", "Top 10 Pet Power", "Power"),
+    ("master_power", "Top 10 Masters Power", "Power"),
 )
 
 
 def scout_rows(data: dict, board: str) -> list:
-    required = {"aid", "score"} if board == "alliance_power" else {"uid", "score"}
-    rows = records(data, required)
+    identity = "aid" if board == "alliance_power" else "uid"
+    rows = records(data, {identity})
     if not rows or len(rows) > 100:
         raise APIError(200, "schema")
-    identity = "aid" if board == "alliance_power" else "uid"
+    if any(identity not in row for row in records(data, {"score"})):
+        raise APIError(200, "schema")
     ids = set()
     for row in rows:
         uid = row[identity]
-        if (not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0 or uid in ids
-                or number(row["score"]) == "Unavailable" or row["score"] < 0):
+        score = row.get("score")
+        if not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0 or uid in ids:
+            raise APIError(200, "schema")
+        if score is not None and (
+            number(score) == "Unavailable" or score < 0
+            or (board == "mystic_trial" and score != int(score))
+        ):
             raise APIError(200, "schema")
         ids.add(uid)
-    return sorted(rows, key=lambda row: row["score"], reverse=True)
+    return sorted(rows, key=lambda row: row["score"] if row.get("score") is not None else -1,
+                  reverse=True)
 
 
-def scout_embeds(kids: tuple, kingdoms: list, boards: list, errors: list) -> list:
-    summary = embed(f"Kingdom scout: K{kids[0]} vs K{kids[1]}",
-                    description="Kingdom statistics, not preparation scores or castle battle results.\n"
-                    "Higher numeric value: left / right / tied; not a prediction of a KvK winner.")
-    metrics = [
-        ("Total power", "power"), ("Personal power total", "gov_power"),
-        ("Hero power", "hero_power"), ("Hero total", "hero_total"), ("Master power", "master_power"),
-        ("Troop power", "troop_power"),
-        ("Pet power", "pet_power"), ("Building power", "building_power"),
-        ("Research power", "research_power"), ("Governor gear power", "governor_gear_power"),
-        ("Governor charm power", "governor_charm_power"), ("Kills", "kills"),
-        ("Mystic Trial total (not an individual stage)", "mystic_trial"),
-        ("Island prosperity", "island_prosperity"), ("Migrant score", "migrant_score"),
-        ("Power gain, 7 days", "power_gain_7d"),
-        ("Players on map (not recent activity)", "located"),
-    ]
-    for label, key in metrics:
-        values = [kingdom.get(key) for kingdom in kingdoms]
-        formatted = [number(value) for value in values]
-        standing = "Unavailable"
-        if "Unavailable" not in formatted:
-            standing = "Left higher" if values[0] > values[1] else (
-                "Right higher" if values[0] < values[1] else "Tied")
-        summary.add_field(name=label, value=f"K{kids[0]}: {formatted[0]}\n"
-                          f"K{kids[1]}: {formatted[1]}\n{standing}", inline=True)
-    for count in (10, 100):
-        values = []
-        for indexed in boards:
-            rows = indexed.get("personal_power", [])
-            values.append(number(sum(row["score"] for row in rows[:count]))
-                          if len(rows) >= count else f"Unavailable (need {count} ranked players)")
-        summary.add_field(name=f"Top-{count} player power sum",
-                          value=f"K{kids[0]}: {values[0]}\nK{kids[1]}: {values[1]}", inline=False)
-    summary.add_field(name="API health label (not a verified activity assessment)",
-                      value=f"K{kids[0]}: {text(kingdoms[0].get('health'))}\n"
-                      f"K{kids[1]}: {text(kingdoms[1].get('health'))}", inline=False)
-    output = [summary]
+def scout_embeds(kids: tuple, boards: list, errors: list) -> list:
+    headings = [f"Kingdom #{kid}" for kid in kids]
+    output = []
     for board, title, label in SCOUT_BOARDS:
-        result = embed(title)
+        columns = []
         for index, kid in enumerate(kids):
             rows = boards[index].get(board)
             if rows is None:
-                value = errors[index].get(board, "Leaderboard unavailable.")
+                lines = [MISSING + " " + errors[index].get(board, "Leaderboard unavailable.")]
             else:
                 lines = []
                 for rank, row in enumerate(rows[:10], 1):
                     if board == "alliance_power":
-                        name = f"[{text(row.get('abbr'), 20)}] {text(row.get('name'), 35)}"
+                        name = ranked_name(row, alliance=True)
                     else:
-                        name = text(row.get("nick_name"), 50)
-                    lines.append(f"{rank}. {name} - {label} {number(row['score'])}"[:95])
-                value = "\n".join(lines)
-            result.add_field(name=f"K{kid}", value=value[:1024], inline=True)
-        output.append(result)
+                        name = ranked_name(row)
+                    value = compact_number(row.get("score"), stage=board == "mystic_trial")
+                    position = f"{rank}." if value != MISSING else MISSING
+                    note = " (rank unavailable)" if value == MISSING else ""
+                    lines.append(f"{position} {name} {MISSING} {label} {value}{note}")
+                if any(row.get("score") is None for row in rows):
+                    lines.append("Missing scores: ranking uses available values only.")
+            columns.append(lines)
+        output.extend(side_by_side(title, headings, columns))
+    columns = [[], []]
+    for board, label in PLAYER_COMPARISON_STATS:
+        values = [indexed[board][0].get("score") if indexed.get(board) else None for indexed in boards]
+        stage = board == "mystic_trial"
+        for index in range(2):
+            columns[index].append(f"**{label} - Top Player:** "
+                                  f"{compact_number(values[index], stage=stage)}"
+                                  + higher_label(values, index, stage=stage))
+    output.extend(side_by_side("Kingdom Statistics - Top Player (not totals)", headings, columns))
     for result in output:
         result.set_footer(text="MightPulse | Cached data up to 1 hour old; independent requests | "
                           "Top lists sampled from up to 100 entries per kingdom and board")

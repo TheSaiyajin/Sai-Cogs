@@ -25,7 +25,7 @@ and the event calendar. Install from main:
 ```
 
 For kingdom scouting before the update merges, append
-`feature/kingshot-kingdom-scout` to `repo add` for a new repository.
+`fix/kingshot-scout-output` to `repo add` for a new repository.
 API key setup sends a secure
 Red shared-token modal by DM (`mightpulse`, token name `api_key`); **never pass the
 key in a public command**. Guild settings are independent; the token and API
@@ -52,7 +52,10 @@ and other available boards), with pagination and independent data ages. Missing
 data is labelled unavailable; ranks are relative to each player's own kingdom.
 Use `[p]ks scout 2312 2316` (alias `ks comparekingdoms`) to compare kingdom totals
 and view both kingdoms' top alliances, power players, Town Center levels and
-Mystic Trial stages. Cached report data is not a KvK winner prediction or a
+Mystic Trial stages in five separate messages. The owner-only
+`[p]ks boardtest <kingdom_id> [board]` provides safe record-type/count diagnostics
+for unexpected leaderboard formats (default board `mystic_trial`).
+Cached report data is not a KvK winner prediction or a
 verified recent-activity measurement.
 Administrators can enable `[p]ks auto enable` and `[p]ks remind enable` after
 configuring a channel. Refresh intervals have a five-minute minimum. Inactivity

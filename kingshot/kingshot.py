@@ -491,7 +491,44 @@ class Kingshot(commands.Cog):
                     if error.status not in (404, 200):
                         raise
                     errors[index][board] = str(error)
-        await menu(ctx, scout_embeds(kids, kingdoms, boards, errors), DEFAULT_CONTROLS)
+                    if error.code == "schema":
+                        errors[index][board] += (
+                            f"\nOwner diagnostic: ks boardtest {kid} {board}"
+                        )
+        for card in scout_embeds(kids, kingdoms, boards, errors):
+            await ctx.send(embed=card, allowed_mentions=discord.AllowedMentions.none())
+
+    @ks.command(name="boardtest")
+    @commands.is_owner()
+    @commands.guild_only()
+    async def boardtest(self, ctx, kid: int, board: str = "mystic_trial"):
+        """Owner-only safe leaderboard shape diagnostic. Never sends response values."""
+        data = await self.api.ranks(identifier(kid), board)
+        rows = records(data, {"score"})
+        identity = "aid" if board == "alliance_power" else "uid"
+        lines = [f"Kingdom {kid}, board {board}", f"Records containing score: {len(rows)}"]
+        for key in (identity, "governor_id", "score"):
+            counts = {}
+            for row in rows:
+                kind = type(row[key]).__name__ if key in row else "missing"
+                counts[kind] = counts.get(kind, 0) + 1
+            lines.append(f"{key} types: " + (", ".join(f"{kind}={count}"
+                                                     for kind, count in sorted(counts.items())) or "none"))
+        valid_ids = [row[identity] for row in rows if isinstance(row.get(identity), int)
+                     and not isinstance(row[identity], bool) and row[identity] > 0]
+        lines.append(f"Duplicate positive integer {identity} records: "
+                     f"{len(valid_ids) - len(set(valid_ids))}")
+        invalid_scores = sum(number(row["score"]) == "Unavailable"
+                             or (isinstance(row["score"], (int, float)) and row["score"] < 0)
+                             for row in rows)
+        lines.append(f"Invalid or negative scores: {invalid_scores}")
+        try:
+            parsed = scout_rows(data, board)
+        except APIError:
+            lines.append("Scout parser: rejected (response does not meet the expected record contract).")
+        else:
+            lines.append(f"Scout parser: accepted {len(parsed)} rows.")
+        await ctx.send("\n".join(lines), allowed_mentions=discord.AllowedMentions.none())
 
     @ks.command(name="ranks", ignore_extra=False)
     async def ranks(self, ctx, board: str = "personal_power", kid: Optional[int] = None):

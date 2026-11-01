@@ -116,6 +116,66 @@ def pages(title: str, lines: list, *, data=None) -> list:
             for i, chunk in enumerate(chunks)]
 
 
+def comparison_pages(first: dict, second: dict, stats) -> list:
+    left, right = mapping(first, "player"), mapping(second, "player")
+    title = f"{text(left.get('nick_name'), 90)} vs {text(right.get('nick_name'), 90)}"
+    summary = embed(title)
+    for label, key, _ in stats:
+        summary.add_field(name=label, value=f"{number(left.get(key))} / {number(right.get(key))}",
+                          inline=False)
+    lines = [
+        f"Left: {text(left.get('nick_name'))} ({text(left.get('governor_id'))}), "
+        f"K{number(left.get('kid'))}",
+        f"Right: {text(right.get('nick_name'))} ({text(right.get('governor_id'))}), "
+        f"K{number(right.get('kid'))}",
+        "Ranks are within each player's own kingdom, not global standings.",
+    ]
+    rankings = []
+    for data in (first, second):
+        ranks = data.get("ranks")
+        if ranks is None:
+            ranks = {}
+        if not isinstance(ranks, dict):
+            raise APIError(200, "schema")
+        boards = ranks.get("leaderboards", [])
+        if not isinstance(boards, list):
+            raise APIError(200, "schema")
+        indexed = {}
+        for board in boards:
+            if (not isinstance(board, dict) or not isinstance(board.get("name"), str)
+                    or not board["name"].strip() or board["name"] in indexed):
+                raise APIError(200, "schema")
+            indexed[board["name"]] = board
+        rankings.append((ranks, indexed))
+    for label, value_key, rank_key in (
+        ("Personal power", "power", "power_rank"),
+        ("Kills", "kills", "kills_rank"),
+        ("Town Center", "town_center_level", "town_center_rank"),
+        ("Migrant score", "migrant_score", "migrant_rank"),
+        ("Mystic Trial stage", "mystic_trial", "mystic_rank"),
+    ):
+        values = [f"{number(ranks.get(value_key))} (kingdom rank: {number(ranks.get(rank_key))})"
+                  for ranks, _ in rankings]
+        lines.append(f"**{label}**\nLeft: {values[0]}\nRight: {values[1]}")
+    names = dict.fromkeys(list(rankings[0][1]) + list(rankings[1][1]))
+    for name in names:
+        values = []
+        for _, boards in rankings:
+            board = boards.get(name, {})
+            values.append(f"{number(board.get('value'))} "
+                          f"(kingdom rank: {number(board.get('kingdom_rank'))})")
+        lines.append(f"**{text(name)}**\nLeft: {values[0]}\nRight: {values[1]}")
+    output = [summary] + pages("Ranking comparison", lines)
+    freshness = (f"MightPulse | Ages (seconds), left / right: "
+                 f"{number(first.get('age_seconds'))} / {number(second.get('age_seconds'))}; "
+                 "not necessarily simultaneous")
+    if first.get("fresh") is False or second.get("fresh") is False:
+        freshness += " | Stored upstream data; refresh timed out"
+    for page in output:
+        page.set_footer(text=freshness)
+    return output
+
+
 def kvk_embed(kid: int, matchup: dict, scores: dict = None, unavailable: str = None,
               updated: float = None) -> discord.Embed:
     kingdom = mapping(matchup, "kingdom")

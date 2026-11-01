@@ -12,7 +12,7 @@ from redbot.core.utils.views import SetApiView
 
 from .api import APIError, MightyAPI, alliance_tag, identifier
 from .views import (
-    calendar, embed, fields, image, kvk_embed, mapping, number, pages,
+    calendar, comparison_pages, embed, fields, image, kvk_embed, mapping, number, pages,
     records, roster, text, timestamp,
 )
 
@@ -468,16 +468,9 @@ class Kingshot(commands.Cog):
 
     @ks.command(name="compare")
     async def compare(self, ctx, player1: int, player2: int):
-        """Compare recorded player statistics."""
+        """Compare profiles and all available player ranking values and kingdom positions."""
         first, second = await asyncio.gather(self.api.player(player1), self.api.player(player2))
-        left, right = mapping(first, "player"), mapping(second, "player")
-        result = embed(f"{text(left.get('nick_name'), 90)} vs {text(right.get('nick_name'), 90)}")
-        for label, key, _ in PLAYER_STATS:
-            result.add_field(name=label,
-                             value=f"{number(left.get(key))} / {number(right.get(key))}", inline=False)
-        result.set_footer(text=f"MightPulse | Ages (seconds): {number(first.get('age_seconds'))} / "
-                               f"{number(second.get('age_seconds'))}; not necessarily simultaneous")
-        await ctx.send(embed=result)
+        await menu(ctx, comparison_pages(first, second, PLAYER_STATS), DEFAULT_CONTROLS)
 
     @ks.command(name="ranks", ignore_extra=False)
     async def ranks(self, ctx, board: str = "personal_power", kid: Optional[int] = None):

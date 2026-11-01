@@ -24,8 +24,8 @@ and the event calendar. Install from main:
 [p]ksset test
 ```
 
-For account linking before the update merges, append
-`feature/kingshot-account-linking` to `repo add` for a new repository.
+For expanded ranking comparisons before the update merges, append
+`feature/kingshot-compare-rankings` to `repo add` for a new repository.
 API key setup sends a secure
 Red shared-token modal by DM (`mightpulse`, token name `api_key`); **never pass the
 key in a public command**. Guild settings are independent; the token and API
@@ -46,6 +46,10 @@ Administrators configure `[p]ks linkset role @LinkedPlayer` and optional
 `[p]ks linkset alliance @VILMember`. The bot needs Manage Nicknames/Manage Roles
 and sufficient role hierarchy. Linking does not prove ownership; statistics
 remain public. See the cog README for setup, cleanup and data-deletion details.
+`[p]ks compare <player1> <player2>` also compares all returned player leaderboard
+values and kingdom positions (personal power, kills, Mystic Trial stage, pet power
+and other available boards), with pagination and independent data ages. Missing
+data is labelled unavailable; ranks are relative to each player's own kingdom.
 Administrators can enable `[p]ks auto enable` and `[p]ks remind enable` after
 configuring a channel. Refresh intervals have a five-minute minimum. Inactivity
 reporting is disabled because the API's player activity fields are stale.

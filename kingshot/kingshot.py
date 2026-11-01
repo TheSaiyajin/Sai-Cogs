@@ -531,6 +531,21 @@ class Kingshot(commands.Cog):
                      and not isinstance(row[identity], bool) and row[identity] > 0]
         lines.append(f"Duplicate positive integer {identity} records: "
                      f"{len(valid_ids) - len(set(valid_ids))}")
+        indexed = {}
+        repeated, conflicting = 0, 0
+        for row in identified:
+            uid = row[identity]
+            if not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0:
+                continue
+            if uid in indexed:
+                if row == indexed[uid]:
+                    repeated += 1
+                else:
+                    conflicting += 1
+            else:
+                indexed[uid] = row
+        lines.append(f"Identical repeated records (safe to deduplicate): {repeated}")
+        lines.append(f"Conflicting repeated records: {conflicting}")
         invalid_scores = sum(row["score"] is not None and (
                              number(row["score"]) == "Unavailable"
                              or (isinstance(row["score"], (int, float)) and row["score"] < 0))
@@ -552,6 +567,7 @@ class Kingshot(commands.Cog):
             lines.append(f"Expected: 1-100 unique positive integer {identity} records; "
                          "scores must be non-negative finite numbers or missing/null. "
                          "Mystic Trial stages must be integers. "
+                         "Identical repeated records are counted once; conflicting repeats fail. "
                          "Score records without the expected identifier are rejected.")
         else:
             lines.append(f"Scout parser: accepted {len(parsed)} rows.")

@@ -684,6 +684,47 @@ def test_scout_rejects_invalid_rank_samples(rows):
         scout_rows({"ok": True, "rows": rows}, "personal_power")
 
 
+@pytest.mark.parametrize("board", [slug for slug, _, _ in SCOUT_BOARDS] + ["town_center"])
+def test_scout_repeated_envelope_records_are_counted_once(board):
+    rows = scout_fixture_rows(board)
+    response = {"ok": True, "rows": rows, "boards": [{"entries": deepcopy(rows)}]}
+    parsed = scout_rows(response, board)
+    assert len(parsed) == 100
+    assert [row["score"] for row in parsed] == list(range(100, 0, -1))
+
+
+@pytest.mark.parametrize("change", [
+    {"score": 999}, {"nick_name": "Different"}, {"governor_id": 999},
+    {"alliance": {"abbr": "Different"}},
+])
+def test_scout_conflicting_duplicate_records_remain_schema_errors(change):
+    rows = scout_fixture_rows("personal_power", count=1)
+    conflicting = deepcopy(rows[0])
+    conflicting.update(change)
+    with pytest.raises(APIError):
+        scout_rows({"rows": rows, "boards": [{"entries": [conflicting]}]}, "personal_power")
+
+
+def test_scout_unique_entry_limit_applies_after_deduplication():
+    rows = scout_fixture_rows("personal_power", count=101)
+    with pytest.raises(APIError):
+        scout_rows({"rows": rows, "entries": deepcopy(rows)}, "personal_power")
+
+
+def test_boardtest_identifies_safe_repeated_records(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    rows = scout_fixture_rows("town_center")
+    cog.api.ranks = AsyncMock(return_value={
+        "ok": True, "rows": rows, "boards": [{"entries": deepcopy(rows)}]})
+    invoke(cog, ctx, "boardtest", 570, "town_center")
+    message = ctx.send.call_args.args[0]
+    assert "Records containing score: 200" in message
+    assert "Duplicate positive integer uid records: 100" in message
+    assert "Identical repeated records (safe to deduplicate): 100" in message
+    assert "Conflicting repeated records: 0" in message
+    assert "Scout parser: accepted 100 rows." in message
+
+
 def test_scout_long_names_all_ten_rows_fit_and_higher_labels():
     boards = {board: scout_rows({"rows": scout_fixture_rows(board)}, board)
               for board, _, _ in SCOUT_BOARDS}

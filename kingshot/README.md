@@ -212,7 +212,12 @@ abort the report with the normal error message rather than masquerading as
 successful empty data. Leaderboard envelope parsing uses the documented entry
 fields, as with `ks ranks`; live authenticated structures remain owner-verifiable.
 Top-list samples can be independently cached and are not necessarily simultaneous.
-Unrecognised/empty envelopes, missing identifiers, duplicate IDs, invalid numeric
+Identical records repeated across response containers are deduplicated by player
+UID or alliance ID **before** enforcing the 100-unique-entry limit. This handles
+responses exposing the same leaderboard more than once without counting players
+twice. Repeated IDs with conflicting record contents remain schema failures;
+no arbitrary record or higher score is selected.
+Unrecognised/empty envelopes, missing identifiers, conflicting duplicate IDs, invalid numeric
 scores and fractional Mystic Trial stages remain explicit schema failures rather
 than silently dropping records or fabricating a leaderboard.
 
@@ -222,6 +227,7 @@ This existing owner-only diagnostic now displays the **HTTP status and API code*
 (such as `429 / rate_limit`), or `200 / ok` followed by **Parser error code: schema**
 when our parser rejects an otherwise successful response. It also displays record
 counts, identifier/score type counts, duplicate-ID and invalid-score counts,
+identical repeated-record and conflicting repeated-record counts,
 missing/null score coverage, non-integer Mystic Trial counts and the expected
 parser contract. It never sends raw API bodies, player names/IDs, score values or
 credentials. It uses the normal cached ranks request. For the Town Center error,
@@ -441,7 +447,7 @@ python -m pytest tests/test_kingshot.py -q
 python -m compileall -q kingshot
 ```
 
-Offline validation on 2026-11-01: **257 Kingshot tests passed** using Python 3.11,
+Offline validation on 2026-11-01: **270 Kingshot tests passed** using Python 3.11,
 Red 3.5.24 and discord.py. Real Red cog injection,
 unload/reload and temporary on-disk JSON Config persistence passed without login.
 Cross-kingdom command parsing, explicit API targets, invalid arguments and

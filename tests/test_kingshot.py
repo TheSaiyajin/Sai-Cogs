@@ -17,7 +17,7 @@ from kingshot.api import APIError, BOARDS, MightyAPI, alliance_tag, identifier, 
 from kingshot.kingshot import GUILD_DEFAULTS, MEMBER_DEFAULTS, PLAYER_STATS, Kingshot
 from kingshot.views import (
     calendar, comparison_pages, kvk_embed, number, pages, records, roster,
-    SCOUT_BOARDS, scout_embeds, scout_rows,
+    SCOUT_BOARDS, PLAYER_COMPARISON_STATS, compact_number, scout_embeds, scout_rows,
 )
 
 
@@ -484,22 +484,28 @@ def test_compare_all_rankings_and_missing_values(cog_context, monkeypatch):
     invoke(cog, ctx, "compare", 1234, 5678)
     assert not mock_menu.called
     output = [call.kwargs["embed"] for call in ctx.send.call_args_list]
-    assert len(output) >= 2
-    description = "\n".join(page.description or "" for page in output)
-    assert "Personal power" in description and "12,000,000 (kingdom rank: 5)" in description
-    assert "Mystic Trial stage" in description and "800 (kingdom rank: 9)" in description
-    assert "**Pet Power**\nLeft: 120,000 (kingdom rank: 7)\nRight: Unavailable" in description
-    assert "**Hero Power**\nLeft: 40,000 (kingdom rank: 2)\nRight: 30,000 (kingdom rank: 8)" in description
-    assert "Island Prosperity" in description and "K571" in description
+    assert len(output) == 1
+    left, right = output[0].fields
+    assert left.inline and right.inline
+    assert "Kingdom #570" in left.name and "Kingdom #571" in right.name
+    assert "[VIL] Governor" in left.value and "Governor ID: 5678" in right.value
+    assert "**Personal Power:** 12M (Tied)" in left.value
+    assert "**Mystic Trial Stage:** 800 (Higher)" in left.value
+    assert "**Pet Power:** 120K" in left.value and "**Pet Power:** —" in right.value
+    assert "**Hero Power:** 40K (Higher)" in left.value
+    assert "**Hero Power:** 30K" in right.value
+    assert "**Masters Power:** —" in left.value
+    assert not any(label in left.value + right.value
+                   for label in ("Island Prosperity", "Kills", "Town Center", "VIP", "kingdom rank"))
     assert all("3,900 / 100" in page.footer.text for page in output)
     assert cog.api.player.await_count == 2
 
 
 def test_compare_missing_rank_sections():
-    output = comparison_pages(PLAYER, PLAYER, PLAYER_STATS)
-    assert len(output) == 2 and len(output[0].fields) == len(PLAYER_STATS)
-    assert "Unavailable" in output[1].description
-    assert "own kingdom" in output[1].description
+    output = comparison_pages(PLAYER, PLAYER)
+    assert len(output) == 1 and len(output[0].fields) == 2
+    assert "**Personal Power:** 12M (Tied)" in output[0].fields[0].value
+    assert output[0].fields[0].value.count(":** —") == 4
 
 
 def test_required_metrics_in_both_comparisons():
@@ -508,38 +514,34 @@ def test_required_metrics_in_both_comparisons():
         {"name": "Hero Power", "value": 300, "kingdom_rank": 1},
         {"name": "Master Power", "value": 400, "kingdom_rank": 2},
         {"name": "Island Prosperity", "value": 500, "kingdom_rank": 3}]}
-    output = comparison_pages(first, PLAYER, PLAYER_STATS)
-    description = "\n".join(card.description or "" for card in output)
-    for label in ("Personal power", "Hero Power", "Mystic Trial", "Master Power", "Island Prosperity"):
-        assert label in description
-    assert output[0].fields[0].name == "Total power (player profile)"
-    assert "300 (kingdom rank: 1)" in description
-    assert "400 (kingdom rank: 2)" in description
-    assert "500 (kingdom rank: 3)" in description
-    kingdom = dict(power=100, gov_power=200, hero_power=300, hero_total=350,
-                   master_power=400, mystic_trial=450, island_prosperity=500)
-    scout = scout_embeds((570, 463), [kingdom, {}], [{}, {}], [{}, {}])[0]
-    for label, value in (("Total power", 100), ("Personal power total", 200),
-                         ("Hero power", 300), ("Master power", 400),
-                         ("Mystic Trial total (not an individual stage)", 450),
-                         ("Island prosperity", 500)):
-        field = next(field for field in scout.fields if field.name == label)
-        assert f"K570: {value}" in field.value and "K463: Unavailable" in field.value
-    assert len(scout.fields) <= 25 and len(scout) <= 6000
+    first["ranks"]["leaderboards"].append({"name": "Pet Power", "value": 500})
+    output = comparison_pages(first, PLAYER)
+    value = output[0].fields[0].value
+    for _, label in PLAYER_COMPARISON_STATS:
+        assert label in value
+    assert "**Hero Power:** 300" in value and "**Masters Power:** 400" in value
+    assert "Island Prosperity" not in value
+    boards = {slug: [{"uid": 1, "score": index + 100}]
+              for index, (slug, _) in enumerate(PLAYER_COMPARISON_STATS)}
+    scout = scout_embeds((570, 463), [boards, {}], [{}, {}])[-1]
+    for index, (_, label) in enumerate(PLAYER_COMPARISON_STATS):
+        assert f"**{label} - Top Player:** {index + 100}" in scout.fields[0].value
+        assert f"**{label} - Top Player:** —" in scout.fields[1].value
+    assert len(scout.fields) == 2 and len(scout) <= 6000
 
 
 def test_compare_explicit_missing_requested_categories():
-    descriptions = "\n".join(card.description or "" for card in
-                             comparison_pages(PLAYER, PLAYER, PLAYER_STATS))
-    for label in ("Hero Power", "Master Power", "Island Prosperity"):
-        assert f"**{label}**\nLeft: Unavailable" in descriptions
+    value = comparison_pages(PLAYER, PLAYER)[0].fields[0].value
+    for label in ("Mystic Trial Stage", "Hero Power", "Pet Power", "Masters Power"):
+        assert f"**{label}:** —" in value
 
 
 def scout_fixture_rows(board, count=100):
     if board == "alliance_power":
         return [{"aid": i + 1, "abbr": f"A{i}", "name": f"Alliance {i}", "score": i + 1}
                 for i in range(count)]
-    return [{"uid": i + 1, "governor_id": i + 1000, "nick_name": f"Governor {i}", "score": i + 1}
+    return [{"uid": i + 1, "governor_id": i + 1000, "nick_name": f"Governor {i}",
+             "alliance": {"abbr": "VIL"}, "score": i + 1}
             for i in range(count)]
 
 
@@ -555,19 +557,19 @@ def test_scout_command_targets_and_request_budget(cog_context, monkeypatch):
     monkeypatch.setattr("kingshot.kingshot.menu", mock_menu)
     invoke(cog, ctx, "scout", 2312, 2316)
     assert not mock_menu.called
-    assert ctx.send.await_count == 5
+    assert ctx.send.await_count == 7
     output = [call.kwargs["embed"] for call in ctx.send.call_args_list]
-    assert len(output) == 5
-    assert "2312" in output[0].title and "2316" in output[0].title
-    assert any(field.name == "Pet power" for field in output[0].fields)
-    assert any(field.name.startswith("Mystic Trial total") for field in output[0].fields)
-    assert any("5,050" in field.value for field in output[0].fields if "Top-100" in field.name)
-    assert any("955" in field.value for field in output[0].fields if "Top-10" in field.name)
+    assert len(output) == 7
+    assert output[0].fields[0].name == "Kingdom #2312"
+    assert output[0].fields[1].name == "Kingdom #2316"
     assert "Alliance 99" in output[1].fields[0].value
-    assert "Governor 99" in output[2].fields[0].value
-    assert "TC 100" in output[3].fields[0].value
-    assert "Stage 100" in output[4].fields[0].value
-    assert cog.api.kingdom.await_count == 2 and cog.api.ranks.await_count == 8
+    assert "[VIL] Governor 99" in output[0].fields[0].value
+    assert "Stage 100" in output[2].fields[0].value
+    for card in output[:6]:
+        assert all(len(field.value.splitlines()) == 10 for field in card.fields)
+    assert cog.api.kingdom.await_count == 0 and cog.api.ranks.await_count == 12
+    assert [(call.args) for call in cog.api.ranks.await_args_list] == [
+        (kid, board) for kid in (2312, 2316) for board, _, _ in SCOUT_BOARDS]
     assert config.guilds == before
     assert all(len(item) <= 6000 for item in output)
     assert all(len(field.value) <= 1024 for item in output for field in item.fields)
@@ -588,9 +590,10 @@ def test_scout_missing_board_is_visible_without_fabricated_totals(cog_context, m
     invoke(cog, ctx, "scout", 570, 571)
     assert not mock_menu.called
     output = [call.kwargs["embed"] for call in ctx.send.call_args_list]
-    assert "No record found" in output[4].fields[1].value
-    assert all("Unavailable" in f.value for f in output[0].fields if f.name.startswith("Top-"))
-    assert "Unavailable" in output[0].fields[0].value
+    assert "— No record found" in output[2].fields[1].value
+    assert len(output[0].fields[0].value.splitlines()) == 5
+    assert "**Mystic Trial Stage - Top Player:** —" in output[-1].fields[1].value
+    assert "**Personal Power - Top Player:** 5 (Tied)" in output[-1].fields[0].value
 
 
 def test_safe_board_diagnostics_exclude_response_values(cog_context):
@@ -604,7 +607,7 @@ def test_safe_board_diagnostics_exclude_response_values(cog_context):
     assert "Records containing score: 3" in message
     assert "uid types: int=2, missing=1" in message
     assert "Duplicate positive integer uid records: 1" in message
-    assert "Invalid or negative scores: 2" in message
+    assert "Invalid or negative scores: 1" in message
     assert "Scout parser: rejected" in message
     assert "SECRET-VALUE" not in message and "1234" not in message
 
@@ -621,8 +624,8 @@ def test_scout_schema_error_shows_owner_diagnostic(cog_context):
     cog.api.kingdom = AsyncMock(side_effect=lambda kid: {"ok": True, "kingdom": {"kid": kid}})
     cog.api.ranks = AsyncMock(return_value={"ok": True, "rows": []})
     invoke(cog, ctx, "scout", 570, 463)
-    assert ctx.send.await_count == 5
-    assert "ks boardtest 570 mystic_trial" in ctx.send.call_args.kwargs["embed"].fields[0].value
+    assert ctx.send.await_count == 7
+    assert "ks boardtest 570 mystic_trial" in ctx.send.call_args_list[2].kwargs["embed"].fields[0].value
 
 
 @pytest.mark.parametrize("status,code", [(401, "auth"), (403, "forbidden"),
@@ -647,11 +650,11 @@ def test_scout_invalid_ids_make_no_requests(cog_context, kids):
     assert not cog.api.kingdom.called
 
 
-def test_scout_rejects_wrong_kingdom_response(cog_context):
+def test_compare_rejects_wrong_player_response(cog_context):
     cog, ctx, _, _, _ = cog_context
-    cog.api.kingdom = AsyncMock(return_value={"ok": True, "kingdom": {"kid": 999}})
     with pytest.raises(APIError):
-        invoke(cog, ctx, "scout", 570, 571)
+        invoke(cog, ctx, "compare", 1234, 5678)
+    assert not ctx.send.called
 
 
 def test_scout_real_red_argument_parsing_and_alias(cog_context, monkeypatch):
@@ -670,8 +673,11 @@ def test_scout_real_red_argument_parsing_and_alias(cog_context, monkeypatch):
     assert Kingshot.ks.get_command("comparekingdoms") is cmd
 
 
-@pytest.mark.parametrize("rows", [[], [{"uid": 1, "score": None}], [{"uid": 1, "score": -1}],
+@pytest.mark.parametrize("rows", [[], [{"uid": 1, "score": -1}],
                                   [{"uid": 1, "score": float("nan")}],
+                                  [{"uid": 1, "score": "123"}],
+                                  [{"governor_id": 1234, "score": 100}],
+                                  [{"uid": 1, "score": 1}, {"governor_id": 1234, "score": 2}],
                                   [{"uid": 1, "score": 1}, {"uid": 1, "score": 2}]])
 def test_scout_rejects_invalid_rank_samples(rows):
     with pytest.raises(APIError):
@@ -684,20 +690,26 @@ def test_scout_long_names_all_ten_rows_fit_and_higher_labels():
     for values in boards.values():
         for row in values:
             row.update(nick_name="@everyone " * 20, name="Long name " * 20)
-    output = scout_embeds((570, 571), [{"power": 100}, {"power": 50}], [boards, boards], [{}, {}])
-    assert "Left higher" in output[0].fields[0].value
-    for card in output[1:]:
-        assert all("10. " in field.value and len(field.value) <= 1024 for field in card.fields)
+    output = scout_embeds((570, 571), [boards, boards], [{}, {}])
+    assert len(output) > 7
+    for board, title, _ in SCOUT_BOARDS:
+        cards = [card for card in output if card.title.startswith(title)]
+        for index in range(2):
+            complete = "\n".join(card.fields[index].value for card in cards)
+            assert "10. " in complete
+            expected_name = "@\u200beveryone " * 20 if board != "alliance_power" else "Long name " * 20
+            assert complete.count(expected_name) == 10
+    assert all(len(card) <= 6000 and len(card.fields) == 2 for card in output)
+    assert all(len(field.value) <= 1024 and field.inline for card in output for field in card.fields)
 
 
-def test_compare_large_ranking_list_is_paginated_without_lost_records():
+def test_compare_unrelated_rankings_are_excluded():
     first = deepcopy(PLAYER)
     first["ranks"] = {"leaderboards": [
         {"name": f"Board {i}", "value": i, "kingdom_rank": i + 1} for i in range(100)]}
-    output = comparison_pages(first, PLAYER, PLAYER_STATS)
-    assert len(output) > 2
-    descriptions = "\n".join(page.description or "" for page in output)
-    assert all(f"**Board {i}**" in descriptions for i in range(100))
+    output = comparison_pages(first, PLAYER)
+    assert len(output) == 1
+    assert "Board" not in output[0].fields[0].value
     assert all(len(page) <= 6000 for page in output)
     assert all(len(page.description or "") <= 3500 for page in output)
 
@@ -708,7 +720,152 @@ def test_compare_large_ranking_list_is_paginated_without_lost_records():
 def test_compare_malformed_rankings_are_explicit_errors(ranks):
     first = dict(PLAYER, ranks=ranks)
     with pytest.raises(APIError):
-        comparison_pages(first, PLAYER, PLAYER_STATS)
+        comparison_pages(first, PLAYER)
+
+
+@pytest.mark.parametrize("value,expected", [
+    (0, "0"), (999, "999"), (1000, "1K"), (1250, "1.25K"),
+    (1000000, "1M"), (150000000, "150M"), (1000000000, "1B"),
+    (999999, "1M"), (999999999, "1B"),
+    (None, "—"), (True, "—"), (-1, "—"), ("123", "—"),
+    (float("nan"), "—"), (float("inf"), "—"),
+])
+def test_compact_power_numbers(value, expected):
+    assert compact_number(value) == expected
+
+
+def test_mystic_stage_not_power_or_aggregate():
+    first = deepcopy(PLAYER)
+    first["ranks"] = {"mystic_trial": 12345, "leaderboards": [
+        {"name": "Mystic Trial", "value": 99999999},
+        {"name": "Hero Total", "value": 6000000},
+        {"name": "Hero Power", "value": 1000000},
+        {"name": "Single Hero", "value": 9000000}]}
+    value = comparison_pages(first, PLAYER)[0].fields[0].value
+    assert "**Mystic Trial Stage:** 12345" in value and "99" not in value
+    assert "**Hero Power:** 6M" in value
+    assert compact_number(12345, stage=True) == "12345"
+    assert compact_number(1.5, stage=True) == "—"
+    with pytest.raises(APIError):
+        scout_rows({"rows": [{"uid": 1, "score": 1.5}]}, "mystic_trial")
+
+
+def test_compare_normalized_named_boards_and_true_zero():
+    first = deepcopy(PLAYER)
+    first["ranks"] = {"power": 0, "leaderboards": [
+        {"name": " hero_TOTAL ", "value": 0}, {"name": "PET_POWER", "value": 0},
+        {"name": "Masters Power", "value": 0}, {"name": "Mystic Trial", "value": 0}]}
+    value = comparison_pages(first, PLAYER)[0].fields[0].value
+    assert all(f"**{label}:** 0" in value for _, label in PLAYER_COMPARISON_STATS)
+
+
+@pytest.mark.parametrize("players", [(0, 5678), (1234, -1), (1234, 1234)])
+def test_compare_invalid_ids_make_no_requests(cog_context, players):
+    cog, ctx, _, _, _ = cog_context
+    with pytest.raises(ValueError):
+        invoke(cog, ctx, "compare", *players)
+    assert not cog.api.player.called and not ctx.send.called
+
+
+@pytest.mark.parametrize("name", ["compare", "scout"])
+def test_comparison_commands_accept_exactly_two_ids(cog_context, monkeypatch, name):
+    from discord.ext.commands.view import StringView
+    from redbot.core import commands
+
+    cog, _, _, _, _ = cog_context
+    cmd = getattr(Kingshot, name)
+    monkeypatch.setattr(cmd, "cog", cog)
+    for arguments, error in (("1234", commands.MissingRequiredArgument),
+                             ("1234 5678 9000", commands.TooManyArguments)):
+        message = MagicMock()
+        message.attachments = []
+        parsed = commands.Context(message=message, bot=cog.bot,
+                                  view=StringView(arguments), command=cmd)
+        with pytest.raises(error):
+            run(cmd._parse_arguments(parsed))
+
+
+def test_scout_rankings_are_independent_and_summary_uses_each_top_player(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    boards = [slug for slug, _, _ in SCOUT_BOARDS]
+
+    async def ranks(kid, board):
+        index = boards.index(board)
+        identity = "aid" if board == "alliance_power" else "uid"
+        return {"ok": True, "rows": [
+            {identity: index * 100 + i + 1, "nick_name": f"{board} Player {i}",
+             "name": f"{board} Alliance {i}", "abbr": "TAG",
+             "score": (i + 1) * 1000 + index * 100 + (1 if kid == 571 else 0)}
+            for i in range(15)]}
+
+    cog.api.ranks = AsyncMock(side_effect=ranks)
+    invoke(cog, ctx, "scout", 570, 571)
+    output = [call.kwargs["embed"] for call in ctx.send.call_args_list]
+    for index, (slug, _, _) in enumerate(SCOUT_BOARDS):
+        left, right = output[index].fields
+        assert left.inline and right.inline
+        assert left.name == "Kingdom #570" and right.name == "Kingdom #571"
+        lines = left.value.splitlines()
+        assert len(lines) == 10
+        escaped_slug = discord.utils.escape_markdown(slug)
+        assert all(f"{escaped_slug} " in line and "[TAG]" in line for line in lines)
+        assert "14" in lines[0] and " 5 " in lines[-1]
+    for slug, label in PLAYER_COMPARISON_STATS:
+        index = boards.index(slug)
+        expected = compact_number(15000 + index * 100, stage=slug == "mystic_trial")
+        assert f"**{label} - Top Player:** {expected}" in output[-1].fields[0].value
+        assert f"**{label} - Top Player:**" in output[-1].fields[1].value
+    assert output[-1].fields[1].value.count("(Higher)") == 5
+
+
+def test_scout_partial_scores_do_not_become_zero_or_inferred_ranks():
+    rows = scout_rows({"rows": [
+        {"uid": 1, "nick_name": "Missing", "score": None},
+        {"uid": 2, "nick_name": "Zero", "score": 0},
+        {"uid": 3, "nick_name": "Highest", "score": 1000},
+        {"uid": 4, "nick_name": "Omitted"},
+    ]}, "personal_power")
+    assert [row["uid"] for row in rows] == [3, 2, 1, 4]
+    output = scout_embeds((570, 571), [{"personal_power": rows}, {}], [{}, {}])
+    value = output[0].fields[0].value
+    assert "1. [—] Highest — Power 1K" in value
+    assert "2. [—] Zero — Power 0" in value
+    assert "— [—] Missing — Power — (rank unavailable)" in value
+    assert "— [—] Omitted — Power — (rank unavailable)" in value
+    assert "Missing scores" in value
+    assert "**Personal Power - Top Player:** 1K" in output[-1].fields[0].value
+    assert "(Higher)" not in output[-1].fields[0].value
+
+
+def test_compare_extreme_names_are_continued_without_loss():
+    first = deepcopy(PLAYER)
+    first["player"]["nick_name"] = "FullName" * 500
+    output = comparison_pages(first, PLAYER)
+    assert len(output) > 1
+    value = "".join(card.fields[0].value for card in output)
+    assert first["player"]["nick_name"] in value
+    assert all(f"**{label}:**" in value for _, label in PLAYER_COMPARISON_STATS)
+    assert all(len(card) <= 6000 for card in output)
+    assert all(field.inline and len(field.value) <= 1024 for card in output for field in card.fields)
+
+
+def test_boardtest_reports_http_status_and_api_code(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.ranks = AsyncMock(side_effect=APIError(429, "rate_limit"))
+    invoke(cog, ctx, "boardtest", 570, "town_center")
+    message = ctx.send.call_args.args[0]
+    assert "HTTP status: 429" in message and "API code: rate_limit" in message
+
+
+def test_boardtest_reports_parser_code_and_missing_identifier(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.ranks = AsyncMock(return_value={"ok": True, "rows": [
+        {"governor_id": 1234, "score": 10, "nick_name": "DO-NOT-SHOW"}]})
+    invoke(cog, ctx, "boardtest", 570, "town_center")
+    message = ctx.send.call_args.args[0]
+    assert "HTTP status: 200; API code: ok" in message
+    assert "Parser error code: schema" in message and "uid types: missing=1" in message
+    assert "DO-NOT-SHOW" not in message and "1234" not in message
 
 
 def test_ranks_kingdom_and_matchup_commands(cog_context):

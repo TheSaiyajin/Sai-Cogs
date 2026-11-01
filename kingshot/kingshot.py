@@ -466,23 +466,25 @@ class Kingshot(commands.Cog):
                          f"Score {number(item.get('score'))} | Combat {number(item.get('combat'))}")
         await self._send_pages(ctx, "Governor equipment", lines, data)
 
-    @ks.command(name="compare")
+    @ks.command(name="compare", ignore_extra=False)
     async def compare(self, ctx, player1: int, player2: int):
-        """Compare profiles and all available player ranking values and kingdom positions."""
+        """Compare two players: personal power, Mystic Trial, hero, pet and masters power."""
+        player1, player2 = identifier(player1), identifier(player2)
+        if player1 == player2:
+            raise ValueError("Choose two different governor IDs.")
         first, second = await asyncio.gather(self.api.player(player1), self.api.player(player2))
-        for card in comparison_pages(first, second, PLAYER_STATS):
+        if any(mapping(data, "player").get("governor_id") != governor_id
+               for data, governor_id in ((first, player1), (second, player2))):
+            raise APIError(200, "schema")
+        for card in comparison_pages(first, second):
             await ctx.send(embed=card, allowed_mentions=discord.AllowedMentions.none())
 
     @ks.command(name="scout", aliases=["comparekingdoms"], ignore_extra=False)
     async def scout(self, ctx, kingdom1: int, kingdom2: int):
-        """Compare two kingdoms and their top alliances, power, TC and Mystic Trial players."""
+        """Compare kingdoms with six independent top-10 boards and top-player statistics."""
         kids = (identifier(kingdom1), identifier(kingdom2))
         if kids[0] == kids[1]:
             raise ValueError("Choose two different kingdom IDs.")
-        data = await asyncio.gather(*(self.api.kingdom(kid) for kid in kids))
-        kingdoms = [mapping(item, "kingdom") for item in data]
-        if any(kingdom.get("kid") != kid for kid, kingdom in zip(kids, kingdoms)):
-            raise APIError(200, "schema")
         boards, errors = [{}, {}], [{}, {}]
         for index, kid in enumerate(kids):
             for board, _, _ in SCOUT_BOARDS:
@@ -496,7 +498,7 @@ class Kingshot(commands.Cog):
                         errors[index][board] += (
                             f"\nOwner diagnostic: ks boardtest {kid} {board}"
                         )
-        for card in scout_embeds(kids, kingdoms, boards, errors):
+        for card in scout_embeds(kids, boards, errors):
             await ctx.send(embed=card, allowed_mentions=discord.AllowedMentions.none())
 
     @ks.command(name="boardtest")
@@ -504,10 +506,20 @@ class Kingshot(commands.Cog):
     @commands.guild_only()
     async def boardtest(self, ctx, kid: int, board: str = "mystic_trial"):
         """Owner-only safe leaderboard shape diagnostic. Never sends response values."""
-        data = await self.api.ranks(identifier(kid), board)
+        kid = identifier(kid)
+        try:
+            data = await self.api.ranks(kid, board)
+        except APIError as error:
+            await ctx.send(f"Kingdom {kid}, board {board}\n"
+                           f"HTTP status: {error.status}\nAPI code: {error.code}\n{error}",
+                           allowed_mentions=discord.AllowedMentions.none())
+            return
         rows = records(data, {"score"})
         identity = "aid" if board == "alliance_power" else "uid"
-        lines = [f"Kingdom {kid}, board {board}", f"Records containing score: {len(rows)}"]
+        identified = records(data, {identity})
+        lines = [f"Kingdom {kid}, board {board}", "HTTP status: 200; API code: ok",
+                 f"Records containing score: {len(rows)}",
+                 f"Records containing {identity}: {len(identified)}"]
         for key in (identity, "governor_id", "score"):
             counts = {}
             for row in rows:
@@ -519,14 +531,28 @@ class Kingshot(commands.Cog):
                      and not isinstance(row[identity], bool) and row[identity] > 0]
         lines.append(f"Duplicate positive integer {identity} records: "
                      f"{len(valid_ids) - len(set(valid_ids))}")
-        invalid_scores = sum(number(row["score"]) == "Unavailable"
-                             or (isinstance(row["score"], (int, float)) and row["score"] < 0)
+        invalid_scores = sum(row["score"] is not None and (
+                             number(row["score"]) == "Unavailable"
+                             or (isinstance(row["score"], (int, float)) and row["score"] < 0))
                              for row in rows)
         lines.append(f"Invalid or negative scores: {invalid_scores}")
+        lines.append(f"Missing/null scores on identified records: "
+                     f"{sum(row.get('score') is None for row in identified)}")
+        if board == "mystic_trial":
+            fractional = sum(
+                number(row["score"]) != "Unavailable" and row["score"] != int(row["score"])
+                for row in rows
+            )
+            lines.append(f"Non-integer Mystic Trial stages: {fractional}")
         try:
             parsed = scout_rows(data, board)
-        except APIError:
+        except APIError as error:
+            lines.append(f"Parser error code: {error.code}")
             lines.append("Scout parser: rejected (response does not meet the expected record contract).")
+            lines.append(f"Expected: 1-100 unique positive integer {identity} records; "
+                         "scores must be non-negative finite numbers or missing/null. "
+                         "Mystic Trial stages must be integers. "
+                         "Score records without the expected identifier are rejected.")
         else:
             lines.append(f"Scout parser: accepted {len(parsed)} rows.")
         await ctx.send("\n".join(lines), allowed_mentions=discord.AllowedMentions.none())

@@ -470,7 +470,8 @@ class Kingshot(commands.Cog):
     async def compare(self, ctx, player1: int, player2: int):
         """Compare profiles and all available player ranking values and kingdom positions."""
         first, second = await asyncio.gather(self.api.player(player1), self.api.player(player2))
-        await menu(ctx, comparison_pages(first, second, PLAYER_STATS), DEFAULT_CONTROLS)
+        for card in comparison_pages(first, second, PLAYER_STATS):
+            await ctx.send(embed=card, allowed_mentions=discord.AllowedMentions.none())
 
     @ks.command(name="scout", aliases=["comparekingdoms"], ignore_extra=False)
     async def scout(self, ctx, kingdom1: int, kingdom2: int):

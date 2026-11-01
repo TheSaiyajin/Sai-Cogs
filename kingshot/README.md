@@ -145,7 +145,7 @@ Links are per Discord server and have no automatic activity or ownership checks.
 | `[p]ks player <governor_id>` | Name, governor ID, power, Town Center, kills, VIP, alliance, kingdom, avatar |
 | `[p]ks heroes <governor_id>` | Recorded **arena defence team**, levels, stars, power, equipped upgrades/mastery and widget |
 | `[p]ks gear <governor_id>` | Governor gear, quality, tier, stars, strength upgrades, score and combat; hidden gear is identified |
-| `[p]ks compare <player1> <player2>` | Profile statistics plus all available player ranking values and kingdom positions, including personal power, kills, Mystic Trial stage and returned pet/hero/other boards; paginated with independent data ages |
+| `[p]ks compare <player1> <player2>` | Profile and ranking comparison in separate messages: total/personal power, hero power, Mystic Trial, master power, island prosperity and other returned boards; independent data ages |
 | `[p]ks scout <kingdom1> <kingdom2>` | Kingdom metric comparison and top alliances, power players, TC levels and Mystic Trial stages; alias `comparekingdoms` |
 | `[p]ks ranks [board] [kingdom_id]` | Up to 100 leaderboard entries, paginated; default `personal_power` |
 | `[p]ks alliance [kingdom_id tag]` | Alliance overview; omit both arguments for configured alliance |
@@ -172,7 +172,8 @@ Links are per Discord server and have no automatic activity or ownership checks.
 The command sends five **separate messages**, similar to a scouting report
 (no page/reaction menu):
 
-1. Kingdom totals: power, hero/troop/pet/building/research/gear/charm power,
+1. Kingdom totals: total power, personal power total (`gov_power`), hero power,
+   hero total, master power, troop/pet/building/research/gear/charm power,
    kills, Mystic Trial aggregate, island prosperity, migrant score, published
    7-day power gain and on-map player count. Each metric shows both kingdoms and
    whether the left or right numeric value is higher (or tied).
@@ -219,11 +220,18 @@ data unavailable until the actual authenticated shape is diagnosed.
 
 ### Comparing players and rankings
 
-`[p]ks compare <player1> <player2>` accepts two in-game governor IDs. The first
-page retains power, TC, kills, VIP and kingdom. Further pages compare documented
+`[p]ks compare <player1> <player2>` accepts two in-game governor IDs and sends
+each comparison card as a **separate message**, not a pagination menu. The first
+card retains total profile power, TC, kills, VIP and kingdom. Further cards compare documented
 `ranks` values and positions for personal power, kills, Town Center, migrant
 score and Mystic Trial stage, plus **every named entry returned in each player's
 `ranks.leaderboards`** (for example pet power, hero power or island prosperity).
+Hero power, hero total, master power and island prosperity categories are always
+shown, labelled `Unavailable` when omitted by the API. Personal power and Mystic
+Trial use the documented fixed `ranks` fields; other values come only from named
+leaderboard entries. Player total power is the profile's `power`, not an invented
+sum of components. Kingdom personal power total uses `gov_power` and is displayed
+separately from overall kingdom `power`.
 
 Boards are matched by their API-provided name, not their list position. A board
 present for only one player still appears, with the other value shown as
@@ -419,7 +427,7 @@ python -m pytest tests/test_kingshot.py -q
 python -m compileall -q kingshot
 ```
 
-Offline validation on 2026-11-01: **226 Kingshot tests / 242 full repository tests
+Offline validation on 2026-11-01: **228 Kingshot tests / 244 full repository tests
 passed**, with Python 3.11, Red 3.5.24 and discord.py 2.7.1. Real Red cog injection,
 unload/reload and temporary on-disk JSON Config persistence passed without login.
 Cross-kingdom command parsing, explicit API targets, invalid arguments and

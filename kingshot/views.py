@@ -121,6 +121,8 @@ def comparison_pages(first: dict, second: dict, stats) -> list:
     title = f"{text(left.get('nick_name'), 90)} vs {text(right.get('nick_name'), 90)}"
     summary = embed(title)
     for label, key, _ in stats:
+        if key == "power":
+            label = "Total power (player profile)"
         summary.add_field(name=label, value=f"{number(left.get(key))} / {number(right.get(key))}",
                           inline=False)
     lines = [
@@ -158,6 +160,11 @@ def comparison_pages(first: dict, second: dict, stats) -> list:
                   for ranks, _ in rankings]
         lines.append(f"**{label}**\nLeft: {values[0]}\nRight: {values[1]}")
     names = dict.fromkeys(list(rankings[0][1]) + list(rankings[1][1]))
+    # Keep requested categories visible even when the API omits their leaderboard entries.
+    normalized_names = {name.casefold().replace("_", " ") for name in names}
+    for label in ("Hero Power", "Hero Total", "Master Power", "Island Prosperity"):
+        if label.casefold() not in normalized_names:
+            names[label] = None
     for name in names:
         values = []
         for _, boards in rankings:
@@ -205,7 +212,9 @@ def scout_embeds(kids: tuple, kingdoms: list, boards: list, errors: list) -> lis
                     description="Kingdom statistics, not preparation scores or castle battle results.\n"
                     "Higher numeric value: left / right / tied; not a prediction of a KvK winner.")
     metrics = [
-        ("Total power", "power"), ("Hero power", "hero_power"), ("Troop power", "troop_power"),
+        ("Total power", "power"), ("Personal power total", "gov_power"),
+        ("Hero power", "hero_power"), ("Hero total", "hero_total"), ("Master power", "master_power"),
+        ("Troop power", "troop_power"),
         ("Pet power", "pet_power"), ("Building power", "building_power"),
         ("Research power", "research_power"), ("Governor gear power", "governor_gear_power"),
         ("Governor charm power", "governor_charm_power"), ("Kills", "kills"),

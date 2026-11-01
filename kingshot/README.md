@@ -18,7 +18,7 @@ declared for Downloader; Red already uses it. Install from the main branch:
 
 If `sai-cogs` is already added, use that repository name and its configured branch.
 For the kingdom scouting update before merge, append
-`feature/kingshot-kingdom-scout` to `repo add` when adding a new repository.
+`fix/kingshot-scout-output` to `repo add` when adding a new repository.
 `[p]` means your bot's command prefix, not literal text.
 
 ### Secure configuration (bot owner)
@@ -169,7 +169,8 @@ Links are per Discord server and have no automatic activity or ownership checks.
 [p]ks comparekingdoms 2312 2316
 ```
 
-The command shows five navigable cards, similar to a scouting report:
+The command sends five **separate messages**, similar to a scouting report
+(no page/reaction menu):
 
 1. Kingdom totals: power, hero/troop/pet/building/research/gear/charm power,
    kills, Mystic Trial aggregate, island prosperity, migrant score, published
@@ -206,6 +207,15 @@ abort the report with the normal error message rather than masquerading as
 successful empty data. Leaderboard envelope parsing uses the documented entry
 fields, as with `ks ranks`; live authenticated structures remain owner-verifiable.
 Top-list samples can be independently cached and are not necessarily simultaneous.
+
+If a card reports an unexpected response format, the owner can run
+`[p]ks boardtest 570 mystic_trial` (substitute kingdom/board) and share its output.
+This owner-only diagnostic displays record counts, identifier/score type counts,
+duplicate-ID and invalid-score counts, and parser acceptance. It never sends raw
+API bodies, player names/IDs, score values or credentials. It uses the normal
+cached ranks request. A screenshot alone cannot distinguish missing identifiers,
+string/null scores, duplicate records, or an undocumented API envelope; keep the
+data unavailable until the actual authenticated shape is diagnosed.
 
 ### Comparing players and rankings
 
@@ -409,7 +419,7 @@ python -m pytest tests/test_kingshot.py -q
 python -m compileall -q kingshot
 ```
 
-Offline validation on 2026-11-01: **223 Kingshot tests / 239 full repository tests
+Offline validation on 2026-11-01: **226 Kingshot tests / 242 full repository tests
 passed**, with Python 3.11, Red 3.5.24 and discord.py 2.7.1. Real Red cog injection,
 unload/reload and temporary on-disk JSON Config persistence passed without login.
 Cross-kingdom command parsing, explicit API targets, invalid arguments and
@@ -437,6 +447,8 @@ The bot owner must perform live acceptance after installation:
    member below the bot, and verify nickname, role assignment and restoration.
 8. Run `ks scout <kingdom1> <kingdom2>` and check all five cards against actual
    kingdom/board data, particularly Mystic Trial totals versus individual stages.
+   The report sends five separate messages. If a board fails, run `ks boardtest`
+   to collect safe schema diagnostics before claiming that the live issue is fixed.
 
 No real Discord login or authenticated MightPulse requests are made in automated
 tests. Installation in your running bot and live subscription behavior cannot be

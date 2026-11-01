@@ -519,7 +519,9 @@ def test_scout_command_targets_and_request_budget(cog_context, monkeypatch):
     mock_menu = AsyncMock()
     monkeypatch.setattr("kingshot.kingshot.menu", mock_menu)
     invoke(cog, ctx, "scout", 2312, 2316)
-    output = mock_menu.call_args.args[1]
+    assert not mock_menu.called
+    assert ctx.send.await_count == 5
+    output = [call.kwargs["embed"] for call in ctx.send.call_args_list]
     assert len(output) == 5
     assert "2312" in output[0].title and "2316" in output[0].title
     assert any(field.name == "Pet power" for field in output[0].fields)
@@ -549,10 +551,43 @@ def test_scout_missing_board_is_visible_without_fabricated_totals(cog_context, m
     mock_menu = AsyncMock()
     monkeypatch.setattr("kingshot.kingshot.menu", mock_menu)
     invoke(cog, ctx, "scout", 570, 571)
-    output = mock_menu.call_args.args[1]
+    assert not mock_menu.called
+    output = [call.kwargs["embed"] for call in ctx.send.call_args_list]
     assert "No record found" in output[4].fields[1].value
     assert all("Unavailable" in f.value for f in output[0].fields if f.name.startswith("Top-"))
     assert "Unavailable" in output[0].fields[0].value
+
+
+def test_safe_board_diagnostics_exclude_response_values(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.ranks = AsyncMock(return_value={"ok": True, "rows": [
+        {"uid": 10, "score": "123", "nick_name": "SECRET-VALUE"},
+        {"uid": 10, "score": 99},
+        {"governor_id": 1234, "score": None}]})
+    invoke(cog, ctx, "boardtest", 570, "mystic_trial")
+    message = ctx.send.call_args.args[0]
+    assert "Records containing score: 3" in message
+    assert "uid types: int=2, missing=1" in message
+    assert "Duplicate positive integer uid records: 1" in message
+    assert "Invalid or negative scores: 2" in message
+    assert "Scout parser: rejected" in message
+    assert "SECRET-VALUE" not in message and "1234" not in message
+
+
+def test_safe_board_diagnostics_accept_valid_data(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.ranks = AsyncMock(return_value={"ok": True, "rows": scout_fixture_rows("mystic_trial")})
+    invoke(cog, ctx, "boardtest", 570)
+    assert "Scout parser: accepted 100 rows." in ctx.send.call_args.args[0]
+
+
+def test_scout_schema_error_shows_owner_diagnostic(cog_context):
+    cog, ctx, _, _, _ = cog_context
+    cog.api.kingdom = AsyncMock(side_effect=lambda kid: {"ok": True, "kingdom": {"kid": kid}})
+    cog.api.ranks = AsyncMock(return_value={"ok": True, "rows": []})
+    invoke(cog, ctx, "scout", 570, 463)
+    assert ctx.send.await_count == 5
+    assert "ks boardtest 570 mystic_trial" in ctx.send.call_args.kwargs["embed"].fields[0].value
 
 
 @pytest.mark.parametrize("status,code", [(401, "auth"), (403, "forbidden"),
@@ -1470,11 +1505,13 @@ def test_real_red_command_registration():
     command = Kingshot.ks
     expected = {"player", "heroes", "gear", "compare", "ranks", "alliance", "members", "top",
                 "inactive", "progress", "changes", "kingdom", "kvk", "score", "kvkdays",
-                "matchups", "events", "usage", "auto", "remind", "linkset", "scout", "comparekingdoms"}
+                "matchups", "events", "usage", "auto", "remind", "linkset", "scout",
+                "comparekingdoms", "boardtest"}
     assert set(command.all_commands) == expected
     from redbot.core.commands.requires import PrivilegeLevel
     assert Kingshot.ksset.requires.privilege_level == PrivilegeLevel.BOT_OWNER
     assert Kingshot.usage.requires.privilege_level == PrivilegeLevel.BOT_OWNER
+    assert Kingshot.boardtest.requires.privilege_level == PrivilegeLevel.BOT_OWNER
     assert Kingshot.auto.requires.privilege_level == PrivilegeLevel.ADMIN
     assert Kingshot.remind.requires.privilege_level == PrivilegeLevel.ADMIN
     assert Kingshot.linkset.requires.privilege_level == PrivilegeLevel.ADMIN

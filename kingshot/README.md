@@ -17,8 +17,8 @@ declared for Downloader; Red already uses it. Install from the main branch:
 ```
 
 If `sai-cogs` is already added, use that repository name and its configured branch.
-For the account-linking update before merge, append
-`feature/kingshot-account-linking` to `repo add` when adding a new repository.
+For the expanded comparison update before merge, append
+`feature/kingshot-compare-rankings` to `repo add` when adding a new repository.
 `[p]` means your bot's command prefix, not literal text.
 
 ### Secure configuration (bot owner)
@@ -145,7 +145,7 @@ Links are per Discord server and have no automatic activity or ownership checks.
 | `[p]ks player <governor_id>` | Name, governor ID, power, Town Center, kills, VIP, alliance, kingdom, avatar |
 | `[p]ks heroes <governor_id>` | Recorded **arena defence team**, levels, stars, power, equipped upgrades/mastery and widget |
 | `[p]ks gear <governor_id>` | Governor gear, quality, tier, stars, strength upgrades, score and combat; hidden gear is identified |
-| `[p]ks compare <player1> <player2>` | Recorded power, TC, kills, VIP and kingdom, with independent data ages |
+| `[p]ks compare <player1> <player2>` | Profile statistics plus all available player ranking values and kingdom positions, including personal power, kills, Mystic Trial stage and returned pet/hero/other boards; paginated with independent data ages |
 | `[p]ks ranks [board] [kingdom_id]` | Up to 100 leaderboard entries, paginated; default `personal_power` |
 | `[p]ks alliance [kingdom_id tag]` | Alliance overview; omit both arguments for configured alliance |
 | `[p]ks members [kingdom_id tag]` | Paginated roster, IDs, alliance ranks, power and TC |
@@ -160,6 +160,27 @@ Links are per Discord server and have no automatic activity or ownership checks.
 | `[p]ks matchups` | Available current-season matchup records |
 | `[p]ks events [kingdom_id]` | Kingdom calendar with start/end Discord timestamps |
 | `[p]ks usage` | **Bot owner only:** Mighty status and minute/day allowance |
+
+### Comparing players and rankings
+
+`[p]ks compare <player1> <player2>` accepts two in-game governor IDs. The first
+page retains power, TC, kills, VIP and kingdom. Further pages compare documented
+`ranks` values and positions for personal power, kills, Town Center, migrant
+score and Mystic Trial stage, plus **every named entry returned in each player's
+`ranks.leaderboards`** (for example pet power, hero power or island prosperity).
+
+Boards are matched by their API-provided name, not their list position. A board
+present for only one player still appears, with the other value shown as
+`Unavailable`. Missing ranks are never zero. Only returned player data is compared;
+the cog does not fetch every kingdom leaderboard or invent missing pet/stage data.
+The API may not return every board listed under `ks ranks` for a particular player.
+
+Values are shown as left player / right player with their governor IDs and
+kingdoms labelled. Rank positions belong to each player's **own kingdom**, not
+global standings, so positions across different kingdoms are not directly
+equivalent. All pages show the independent data ages; the records may not be
+simultaneous. Comparisons use the existing cached player requests, with no extra
+paid leaderboard requests.
 
 ### Look up other kingdoms without changing settings
 
@@ -342,7 +363,7 @@ python -m pytest tests/test_kingshot.py -q
 python -m compileall -q kingshot
 ```
 
-Offline validation on 2026-10-31: **199 Kingshot tests / 215 full repository tests
+Offline validation on 2026-11-01: **206 Kingshot tests / 222 full repository tests
 passed**, with Python 3.11, Red 3.5.24 and discord.py 2.7.1. Real Red cog injection,
 unload/reload and temporary on-disk JSON Config persistence passed without login.
 Cross-kingdom command parsing, explicit API targets, invalid arguments and
@@ -350,6 +371,8 @@ unchanged per-guild settings are covered.
 Linking tests cover nickname/role updates, permission/hierarchy failures,
 unverified role restrictions, guild-local duplicate claims, cleanup, retry markers,
 member Config persistence, data deletion and real top-level command registration.
+Ranking comparison tests cover asymmetric/reordered boards, missing values,
+malformed responses, long-list pagination and the existing two-request budget.
 Syntax compilation and `git diff --check` also passed. Two pytest deprecation
 warnings originate in Red's `aiohttp-json-rpc` dependency, not this cog.
 

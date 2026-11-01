@@ -14,8 +14,8 @@ import pytest
 from kingshot import setup
 from kingshot import api as api_module
 from kingshot.api import APIError, BOARDS, MightyAPI, alliance_tag, identifier, retry_delay
-from kingshot.kingshot import GUILD_DEFAULTS, MEMBER_DEFAULTS, Kingshot
-from kingshot.views import calendar, kvk_embed, number, pages, records, roster
+from kingshot.kingshot import GUILD_DEFAULTS, MEMBER_DEFAULTS, PLAYER_STATS, Kingshot
+from kingshot.views import calendar, comparison_pages, kvk_embed, number, pages, records, roster
 
 
 PLAYER = {
@@ -438,7 +438,7 @@ def invoke(cog, ctx, command, *args, **kwargs):
 
 @pytest.mark.parametrize("command,args", [
     ("player", (1234,)), ("heroes", (1234,)), ("gear", (1234,)),
-    ("compare", (1234, 5678)), ("alliance", ()), ("members", ()), ("top", ()),
+    ("alliance", ()), ("members", ()), ("top", ()),
     ("inactive", ()), ("kvk", ()), ("score", ()), ("kvkdays", ()),
     ("events", ()), ("usage", ()), ("status", ()), ("test_api", ()), ("remind_list", ()),
     ("progress", ()), ("changes", ()),
@@ -460,6 +460,62 @@ def test_hidden_gear_and_unavailable_heroes(cog_context):
     data["heroes"] = None
     with pytest.raises(APIError):
         invoke(cog, ctx, "heroes", 1234)
+
+
+def test_compare_all_rankings_and_missing_values(cog_context, monkeypatch):
+    cog, ctx, _, _, _ = cog_context
+    first, second = deepcopy(PLAYER), deepcopy(PLAYER)
+    first["ranks"] = {"power": 12000000, "power_rank": 5, "kills": 2000000,
+                      "kills_rank": 3, "mystic_trial": 800, "mystic_rank": 9,
+                      "leaderboards": [
+                          {"name": "Pet Power", "value": 120000, "kingdom_rank": 7},
+                          {"name": "Hero Power", "value": 40000, "kingdom_rank": 2}]}
+    second["ranks"] = {"mystic_trial": 700, "mystic_rank": 10, "leaderboards": [
+        {"name": "Hero Power", "value": 30000, "kingdom_rank": 8},
+        {"name": "Island Prosperity", "value": 5000, "kingdom_rank": 6}]}
+    second["player"].update(kid=571, governor_id=5678)
+    second["age_seconds"] = 100
+    cog.api.player.side_effect = [first, second]
+    mock_menu = AsyncMock()
+    monkeypatch.setattr("kingshot.kingshot.menu", mock_menu)
+    invoke(cog, ctx, "compare", 1234, 5678)
+    output = mock_menu.call_args.args[1]
+    description = "\n".join(page.description or "" for page in output)
+    assert "Personal power" in description and "12,000,000 (kingdom rank: 5)" in description
+    assert "Mystic Trial stage" in description and "800 (kingdom rank: 9)" in description
+    assert "**Pet Power**\nLeft: 120,000 (kingdom rank: 7)\nRight: Unavailable" in description
+    assert "**Hero Power**\nLeft: 40,000 (kingdom rank: 2)\nRight: 30,000 (kingdom rank: 8)" in description
+    assert "Island Prosperity" in description and "K571" in description
+    assert all("3,900 / 100" in page.footer.text for page in output)
+    assert cog.api.player.await_count == 2
+
+
+def test_compare_missing_rank_sections():
+    output = comparison_pages(PLAYER, PLAYER, PLAYER_STATS)
+    assert len(output) == 2 and len(output[0].fields) == len(PLAYER_STATS)
+    assert "Unavailable" in output[1].description
+    assert "own kingdom" in output[1].description
+
+
+def test_compare_large_ranking_list_is_paginated_without_lost_records():
+    first = deepcopy(PLAYER)
+    first["ranks"] = {"leaderboards": [
+        {"name": f"Board {i}", "value": i, "kingdom_rank": i + 1} for i in range(100)]}
+    output = comparison_pages(first, PLAYER, PLAYER_STATS)
+    assert len(output) > 2
+    descriptions = "\n".join(page.description or "" for page in output)
+    assert all(f"**Board {i}**" in descriptions for i in range(100))
+    assert all(len(page) <= 6000 for page in output)
+    assert all(len(page.description or "") <= 3500 for page in output)
+
+
+@pytest.mark.parametrize("ranks", [[], {"leaderboards": None}, {"leaderboards": [None]},
+                                   {"leaderboards": [{"value": 1}]},
+                                   {"leaderboards": [{"name": "X"}, {"name": "X"}]}])
+def test_compare_malformed_rankings_are_explicit_errors(ranks):
+    first = dict(PLAYER, ranks=ranks)
+    with pytest.raises(APIError):
+        comparison_pages(first, PLAYER, PLAYER_STATS)
 
 
 def test_ranks_kingdom_and_matchup_commands(cog_context):

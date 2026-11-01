@@ -147,11 +147,51 @@ def comparison_text(value: Any) -> str:
     return discord.utils.escape_markdown(discord.utils.escape_mentions(str(value)))
 
 
-def ranked_name(row: dict, *, alliance: bool = False) -> str:
+def ranking_tag(row: dict):
     membership = row.get("alliance")
     tag = row.get("abbr")
     if tag is None and isinstance(membership, dict):
         tag = membership.get("abbr")
+    return tag if isinstance(tag, str) and tag.strip() else None
+
+
+def scout_tags(boards: dict) -> dict:
+    """Reuse tags across boards only through unambiguous returned IDs."""
+    alliances, players = {}, {}
+    for board, rows in boards.items():
+        for row in rows:
+            tag = ranking_tag(row)
+            if tag is None:
+                continue
+            membership = row.get("alliance")
+            aid = row.get("aid")
+            if aid is None and isinstance(membership, dict):
+                aid = membership.get("aid")
+            if isinstance(aid, int) and not isinstance(aid, bool) and aid > 0:
+                alliances.setdefault(aid, set()).add(tag)
+            if not board.startswith("alliance_"):
+                players.setdefault(row["uid"], set()).add(tag)
+    result = {}
+    for board, rows in boards.items():
+        result[board] = []
+        for row in rows:
+            if ranking_tag(row) is None and not board.startswith("alliance_"):
+                membership = row.get("alliance")
+                aid = row.get("aid")
+                if aid is None and isinstance(membership, dict):
+                    aid = membership.get("aid")
+                if isinstance(aid, int) and not isinstance(aid, bool) and aid > 0:
+                    tags = alliances.get(aid, set())
+                else:
+                    tags = players.get(row["uid"], set()) if "alliance" not in row else set()
+                if len(tags) == 1:
+                    row = dict(row, abbr=next(iter(tags)))
+            result[board].append(row)
+    return result
+
+
+def ranked_name(row: dict, *, alliance: bool = False) -> str:
+    tag = ranking_tag(row)
     name = row.get("name") if alliance else row.get("nick_name")
     return f"[{comparison_text(tag)}] {comparison_text(name)}"
 
@@ -266,7 +306,7 @@ SCOUT_BOARDS = (
 
 
 def scout_rows(data: dict, board: str) -> list:
-    identity = "aid" if board == "alliance_power" else "uid"
+    identity = "aid" if board.startswith("alliance_") else "uid"
     rows = records(data, {identity})
     if not rows:
         raise APIError(200, "schema")
@@ -296,6 +336,7 @@ def scout_rows(data: dict, board: str) -> list:
 
 
 def scout_embeds(kids: tuple, boards: list, errors: list) -> list:
+    boards = [scout_tags(indexed) for indexed in boards]
     headings = [f"Kingdom #{kid}" for kid in kids]
     output = []
     for board, title, label in SCOUT_BOARDS:
